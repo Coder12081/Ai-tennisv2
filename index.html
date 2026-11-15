@@ -22,7 +22,7 @@ h2{font-size:16px;margin:0 0 7px}.trail{height:66px;background:#0d1712;border-ra
 <div class="stats">
 <div class="stat"><small>TRACK STATE</small><strong id="detected">--</strong></div><div class="stat"><small>MATCH SCORE*</small><strong id="confidence">--</strong></div><div class="stat"><small>PROCESSING</small><strong id="fps">-- FPS</strong></div><div class="stat"><small>LOST FRAMES</small><strong id="lost">0</strong></div>
 </div>
-<p class="help"><span class="key">Automatic mode:</span> Start tracking, then move the ball to acquire it. Static yellow tape is ignored; the camera must stay still so motion can separate the ball from court markings. The tracker holds a confirmed ball when it pauses and reacquires it if it moves quickly.</p>
+<p class="help"><span class="key">Automatic mode:</span> Start tracking, then move the ball to acquire it. Keep the camera still so motion separates the ball from court markings. LOCKED means a measured ball is being followed; HOLDING means it paused briefly; PREDICTING or SEARCHING means the tracker is reacquiring it. A confirmed track is held when the ball pauses and reacquired if it moves quickly.</p>
 </section>
 <section class="panel"><h2>Recent ball path</h2><canvas id="trail" class="trail" width="900" height="180"></canvas><p class="help">Only confirmed moving-ball detections are drawn. A confirmed track is held briefly when the ball pauses; predicted positions are never added to the measured path.</p></section>
 <section class="panel"><h2>How this version works</h2><p class="help">The detector searches for saturated tennis-ball yellow, filters candidates by shape and apparent size, and follows the best candidate using motion prediction. This is classical computer vision, not a trained neural network. The match score is a heuristic, not a probability.</p></section>
@@ -126,6 +126,7 @@ function detect(){
   }else{
    lost++;if(lost>12)track=null;
    $('detected').textContent=track?'PREDICTING':'SEARCHING';$('confidence').textContent='--';
+   say(track?'Ball lost · Reacquiring':'Searching · Move the ball to reacquire',true);
   }
  }else if(movingCandidates.length){
   movingCandidates.sort((a,b)=>(a.shape-.50*a.motion)-(b.shape-.50*b.motion));
