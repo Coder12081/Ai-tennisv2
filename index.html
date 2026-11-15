@@ -21,6 +21,7 @@ h2{font-size:16px;margin:0 0 7px}.trail{height:66px;background:#0d1712;border-ra
 <div class="status"><span id="dot" class="dot"></span><span id="status">Camera off · Start camera</span></div>
 <div class="controls"><button id="start" class="primary">Start camera</button><button id="track" disabled>Start tracking</button><button id="reset">Reset session</button></div>
 <div class="controls"><button id="calibrate" disabled>Calibrate court</button><button id="undo" disabled>Undo corner</button><button id="clearCourt" disabled>Clear court</button></div>
+<div class="controls"><button id="setNet" disabled>Set net</button><button id="clearNet" disabled>Clear net</button><button id="voice" class="button-active">Umpire voice: On</button></div>
 <div class="stats">
 <div class="stat"><small>TRACK STATE</small><strong id="detected">--</strong></div><div class="stat"><small>MATCH SCORE*</small><strong id="confidence">--</strong></div><div class="stat"><small>PROCESSING</small><strong id="fps">-- FPS</strong></div><div class="stat"><small>LOST FRAMES</small><strong id="lost">0</strong></div>
 </div>
@@ -30,12 +31,13 @@ h2{font-size:16px;margin:0 0 7px}.trail{height:66px;background:#0d1712;border-ra
 <section class="panel"><h2>Court and bounce calls</h2>
 <div class="stats">
 <div class="stat"><small>COURT</small><strong id="courtStatus" class="court-status">Not calibrated</strong></div>
+<div class="stat"><small>MY SIDE</small><strong id="netStatus">Not set</strong></div>
 <div class="stat"><small>BOUNCES</small><strong id="bounceCount">0</strong></div>
 <div class="stat"><small>IN</small><strong id="inCount">0</strong></div>
 <div class="stat"><small>OUT</small><strong id="outCount">0</strong></div>
 </div>
-<p class="help"><span class="key">Setup:</span> Mount the camera and keep the whole taped court in view. Press Calibrate court and tap the four outer corners clockwise. Then hold and drag the numbered handles until they line up with the tape. The line counts as in. Start tracking and rally; the app estimates a bounce from a sharp trajectory change and compares that point with the calibrated court. Bounce and line calls are estimates from one camera view.</p>
-<p class="help">Last landing call: <strong id="lastCall">—</strong></p>
+<p class="help"><span class="key">Setup:</span> Mount the camera and keep the whole taped court in view. Press Calibrate court and tap the four outer corners clockwise. Then hold and drag the numbered handles to align them with the tape. Press Set net, tap both ends of the net, then tap on your side. The tracker will focus on that half. The line counts as in. Bounce calls use motion changes and are estimates from one camera view.</p>
+<p class="help">Last landing call: <strong id="lastCall">—</strong> · Voice says “Out” for OUT and “In” only for estimated line landings.</p>
 </section>
 <section class="panel"><h2>How this version works</h2><p class="help">The detector searches for saturated tennis-ball yellow, filters candidates by shape and apparent size, and follows the best candidate using motion prediction. The match score is a heuristic, not a probability.</p></section>
 </main>
@@ -44,18 +46,21 @@ h2{font-size:16px;margin:0 0 7px}.trail{height:66px;background:#0d1712;border-ra
 const $=id=>document.getElementById(id),video=$('video'),view=$('view'),ctx=view.getContext('2d'),trail=$('trail'),tctx=trail.getContext('2d');
 let stream=null,tracking=false,raf=0,lastDetect=0,frameN=0,fpsTime=0,history=[],track=null,lost=0,previousGray=null,globalMotion=0;
 let grayBuffer=null,changedBuffer=null,maskBuffer=null,seenBuffer=null,pixelStack=null,lastPaint=0;
-let courtCorners=loadCourt(),calibrationPoints=[],calibrating=false,draggingCorner=-1,bounceSamples=[],bounceCount=0,inCount=0,outCount=0,lastBounce=null,lastBounceTime=0,pendingReacquire=null;
+let courtCorners=[],netLine=[],netSideSign=0,calibrationPoints=[],calibrating=false,draggingCorner=-1,netSetting=0,netPoints=[],voiceEnabled=true,bounceSamples=[],bounceCount=0,inCount=0,outCount=0,lastBounce=null,lastBounceTime=0,pendingReacquire=null;
 const SW=400,work=document.createElement('canvas'),wc=work.getContext('2d',{willReadFrequently:true});let SH=225;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
-function loadCourt(){try{const points=JSON.parse(localStorage.getItem('aiTennisCourtCorners')||'[]');return Array.isArray(points)&&points.length===4&&points.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y))?points:[]}catch{return[]}}
+function loadCourt(){try{const saved=JSON.parse(localStorage.getItem('aiTennisCourtCorners')||'null');if(Array.isArray(saved)){courtCorners=saved.length===4?saved:[];return}if(saved&&Array.isArray(saved.corners)){courtCorners=saved.corners.length===4?saved.corners:[];netLine=Array.isArray(saved.netLine)&&saved.netLine.length===2?saved.netLine:[];netSideSign=saved.netSideSign||0}}catch{courtCorners=[];netLine=[];netSideSign=0}}
 function say(s,on=false){$('status').textContent=s;$('dot').classList.toggle('on',on)}
+loadCourt();
 function updateCourtUI(){
  $('courtStatus').textContent=calibrating?('Setup '+calibrationPoints.length+'/4'):courtCorners.length===4?'Calibrated':'Not calibrated';
- $('calibrate').textContent=calibrating?'Cancel setup':'Calibrate court';
- $('calibrate').disabled=!stream&&!calibrating;
- $('calibrate').classList.toggle('button-active',calibrating);
- $('undo').disabled=!calibrating||calibrationPoints.length===0;
- $('clearCourt').disabled=courtCorners.length!==4;
+ $('calibrate').textContent=calibrating?'Cancel setup':'Calibrate court';$('calibrate').disabled=!stream&&!calibrating;$('calibrate').classList.toggle('button-active',calibrating);
+ $('undo').disabled=calibrating?calibrationPoints.length===0:netSetting===1?netPoints.length===0:netSetting!==2;
+ $('clearCourt').disabled=courtCorners.length!==4;$('setNet').textContent=netSetting?'Cancel net setup':'Set net';
+ $('setNet').disabled=courtCorners.length!==4||(!stream&&!netSetting);$('setNet').classList.toggle('button-active',!!netSetting);
+ $('clearNet').disabled=netLine.length!==2||!!netSetting;
+ $('netStatus').textContent=netSetting===1?('Net point '+netPoints.length+'/2'):netSetting===2?'Tap your side':netLine.length===2?'Set · your side':'Not set';
+ $('voice').textContent='Umpire voice: '+(voiceEnabled?'On':'Off');$('voice').classList.toggle('button-active',voiceEnabled);
  $('bounceCount').textContent=bounceCount;$('inCount').textContent=inCount;$('outCount').textContent=outCount;
 }
 function resetResults(){bounceCount=0;inCount=0;outCount=0;lastBounce=null;lastBounceTime=0;bounceSamples=[];$('lastCall').textContent='—';$('lastCall').className='';updateCourtUI()}
@@ -76,42 +81,75 @@ function courtAxis(){
  else{dx=((p[2].x-p[1].x)+(p[3].x-p[0].x))/2;dy=((p[2].y-p[1].y)+(p[3].y-p[0].y))/2;span=edgeB}
  const len=Math.hypot(dx,dy);return len>0?{x:dx/len,y:dy/len,span}:null;
 }
-function pointInsideCourt(x,y,r=0){
+function distanceToCourtLine(x,y){
+ if(courtCorners.length!==4)return Infinity;
+ const pts=courtPoints();let min=Infinity;
+ for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length],dx=b.x-a.x,dy=b.y-a.y,len2=dx*dx+dy*dy,t=len2?clamp(((x-a.x)*dx+(y-a.y)*dy)/len2,0,1):0;min=Math.min(min,Math.hypot(x-(a.x+t*dx),y-(a.y+t*dy)))}
+ return min;
+}
+function pointInsideCourt(x,y,r=0,extra=0){
  if(courtCorners.length!==4)return false;
- const pts=courtPoints();let inside=false,minDistance=Infinity;
- for(let i=0,j=pts.length-1;i<pts.length;j=i++){
-  const a=pts[i],b=pts[j];
-  if(((a.y>y)!==(b.y>y))&&(x<(b.x-a.x)*(y-a.y)/(b.y-a.y)+a.x))inside=!inside;
-  const dx=b.x-a.x,dy=b.y-a.y,len2=dx*dx+dy*dy,t=len2?clamp(((x-a.x)*dx+(y-a.y)*dy)/len2,0,1):0;
-  minDistance=Math.min(minDistance,Math.hypot(x-(a.x+t*dx),y-(a.y+t*dy)));
- }
- return inside||minDistance<=Math.max(3,r);
+ const pts=courtPoints();let inside=false;
+ for(let i=0,j=pts.length-1;i<pts.length;j=i++){const a=pts[i],b=pts[j];if(((a.y>y)!==(b.y>y))&&(x<(b.x-a.x)*(y-a.y)/(b.y-a.y)+a.x))inside=!inside}
+ return inside||distanceToCourtLine(x,y)<=Math.max(3,r+extra);
+}
+function signedNetSide(x,y){
+ if(netLine.length!==2)return 0;
+ const a={x:netLine[0].x*view.width,y:netLine[0].y*view.height},b={x:netLine[1].x*view.width,y:netLine[1].y*view.height};
+ return (b.x-a.x)*(y-a.y)-(b.y-a.y)*(x-a.x);
+}
+function isInMySideRegion(x,y,r=0){
+ if(netLine.length!==2||!netSideSign)return true;
+ const pts=courtPoints(),d=(a,b)=>Math.hypot(b.x-a.x,b.y-a.y);
+ const sideA=(d(pts[0],pts[1])+d(pts[2],pts[3]))/2,sideB=(d(pts[1],pts[2])+d(pts[3],pts[0]))/2;
+ const courtMargin=Math.min(sideA,sideB)*.10;
+ if(!pointInsideCourt(x,y,r,courtMargin))return false;
+ const netLength=Math.hypot((netLine[1].x-netLine[0].x)*view.width,(netLine[1].y-netLine[0].y)*view.height);
+ const axis=courtAxis(),netTolerance=(axis?.span||view.width)*.025;
+ return signedNetSide(x,y)*netSideSign>=-netLength*netTolerance;
+}
+function classifyLanding(x,y,r){
+ const inside=pointInsideCourt(x,y),lineDistance=distanceToCourtLine(x,y),lineMargin=Math.max(4,r*1.15);
+ if(lineDistance<=lineMargin)return 'LINE';
+ return inside?'IN':'OUT';
+}
+function speakUmpire(call){
+ if(!voiceEnabled||!window.speechSynthesis||typeof SpeechSynthesisUtterance==='undefined')return;
+ const words=call==='OUT'?'Out':call==='LINE'?'In':'';
+ if(!words)return;
+ window.speechSynthesis.cancel();
+ const utterance=new SpeechSynthesisUtterance(words),voices=window.speechSynthesis.getVoices();
+ utterance.voice=voices.find(v=>/^en([-_]|$)/i.test(v.lang))||null;
+ utterance.rate=.84;utterance.pitch=.92;utterance.volume=1;window.speechSynthesis.speak(utterance);
 }
 function countBounce(x,y,r,time){
- if(time-lastBounceTime<550)return;
- const inCourt=pointInsideCourt(x,y,r),call=inCourt?'IN':'OUT';
+ if(time-lastBounceTime<650)return;
+ const call=classifyLanding(x,y,r),inCourt=call!=='OUT';
  bounceCount++;if(inCourt)inCount++;else outCount++;
  lastBounce={x,y,call,time};lastBounceTime=time;
- $('lastCall').textContent='EST. '+call;$('lastCall').className=inCourt?'call-in':'call-out';
- updateCourtUI();say('Estimated '+call+' bounce',true);
+ $('lastCall').textContent=call==='LINE'?'LINE · IN':call;$('lastCall').className=inCourt?'call-in':'call-out';
+ updateCourtUI();say(call==='OUT'?'Out':call==='LINE'?'In · line':'Estimated in',true);speakUmpire(call);
 }
 function observeBounce(point,time){
- const axis=courtAxis();if(!axis)return;
- const span=Math.max(1,axis.span),projection=(point.x*axis.x+point.y*axis.y)/span;
- bounceSamples.push({x:point.x,y:point.y,s:projection,time,r:point.r});if(bounceSamples.length>9)bounceSamples.shift();
+ const axis=courtAxis();if(!axis||courtCorners.length!==4)return;
+ const span=Math.max(1,axis.span),longPosition=(point.x*axis.x+point.y*axis.y)/span;
+ bounceSamples.push({x:point.x,y:point.y,long:longPosition,time,r:point.r});if(bounceSamples.length>9)bounceSamples.shift();
  if(bounceSamples.length<7||time-lastBounceTime<650)return;
  const n=bounceSamples.length,a=bounceSamples[n-7],b=bounceSamples[n-6],c=bounceSamples[n-5],pivot=bounceSamples[n-4],e=bounceSamples[n-3],f=bounceSamples[n-2],g=bounceSamples[n-1];
  const dtBefore=(pivot.time-a.time)/1000,dtAfter=(g.time-pivot.time)/1000;
- if(dtBefore<=0||dtAfter<=0||dtBefore>.16||dtAfter>.16)return;
- const pre1=pivot.s-a.s,pre2=pivot.s-b.s,post1=f.s-e.s,post2=g.s-f.s;
- const consistentBefore=pre1*pre2>0,consistentAfter=post1*post2>0;
- const vBefore=pre1/dtBefore,vAfter=(g.s-pivot.s)/dtAfter;
- const dxBefore=(pivot.x-a.x)/span,dyBefore=(pivot.y-a.y)/span,dxAfter=(g.x-pivot.x)/span,dyAfter=(g.y-pivot.y)/span;
- const speedBefore=Math.hypot(dxBefore,dyBefore)/dtBefore,speedAfter=Math.hypot(dxAfter,dyAfter)/dtAfter;
- const cosine=(dxBefore*dxAfter+dyBefore*dyAfter)/Math.max(.0001,Math.hypot(dxBefore,dyBefore)*Math.hypot(dxAfter,dyAfter));
- const longReversal=consistentBefore&&consistentAfter&&vBefore*vAfter<0&&Math.abs(vBefore)>.22&&Math.abs(vAfter)>.22;
- const sharpReversal=cosine<-.48&&speedBefore>.38&&speedAfter>.38&&speedAfter<speedBefore*1.35;
- if(longReversal||sharpReversal)countBounce(pivot.x,pivot.y,Math.max(pivot.r,point.r),time);
+ if(dtBefore<=0||dtAfter<=0||dtBefore>.22||dtAfter>.22)return;
+ const consistent=(u,v)=>u*v>0;
+ const longPre1=b.long-a.long,longPre2=pivot.long-b.long,longPost1=f.long-e.long,longPost2=g.long-f.long;
+ const longBefore=(pivot.long-a.long)/dtBefore,longAfter=(g.long-pivot.long)/dtAfter;
+ const longFlip=consistent(longPre1,longPre2)&&consistent(longPost1,longPost2)&&longBefore*longAfter<0&&Math.abs(longBefore)>.12&&Math.abs(longAfter)>.12;
+ const yPre1=(b.y-a.y)/view.height,yPre2=(pivot.y-b.y)/view.height,yPost1=(f.y-e.y)/view.height,yPost2=(g.y-f.y)/view.height;
+ const vyBefore=(pivot.y-a.y)/view.height/dtBefore,vyAfter=(g.y-pivot.y)/view.height/dtAfter;
+ const verticalFlip=consistent(yPre1,yPre2)&&consistent(yPost1,yPost2)&&vyBefore*vyAfter<0&&Math.abs(vyBefore)>.07&&Math.abs(vyAfter)>.07;
+ const dxBefore=(pivot.x-a.x)/view.width,dyBefore=(pivot.y-a.y)/view.height,dxAfter=(g.x-pivot.x)/view.width,dyAfter=(g.y-pivot.y)/view.height;
+ const magBefore=Math.hypot(dxBefore,dyBefore),magAfter=Math.hypot(dxAfter,dyAfter);
+ const cosine=(dxBefore*dxAfter+dyBefore*dyAfter)/Math.max(.0001,magBefore*magAfter);
+ const sharpTurn=cosine<-.42&&magBefore/dtBefore>.12&&magAfter/dtAfter>.12&&magAfter<magBefore*1.5;
+ if(longFlip||verticalFlip||sharpTurn)countBounce(pivot.x,pivot.y,Math.max(pivot.r,point.r),time);
 }
 function confirmReacquire(candidate,time){
  if(pendingReacquire&&time-pendingReacquire.time<150&&Math.hypot(candidate.x-pendingReacquire.x,candidate.y-pendingReacquire.y)<view.width*.36){
@@ -186,6 +224,7 @@ function detect(){
   const fastBlur=ratio>=.48&&ratio<=2.8&&fill>=.13&&circularity>=.16&&moving&&motionDensity>Math.max(.055,motionFloor*1.35);
   if(!roundBall&&!fastBlur)continue;
   const cx=sumX/area*view.width/SW,cy=sumY/area*view.height/SH,r=diam/2*view.width/SW,motion=clamp((motionDensity-motionFloor)/.28,0,1);
+  if(netLine.length===2&&netSideSign&&!isInMySideRegion(cx,cy,r))continue;
   const shape=(1-circularity)*.48+(1-fill)*.22+Math.abs(Math.log(Math.max(.5,ratio)))*.18+Math.abs(Math.log(Math.max(1,diam)/8))*.02;
   candidates.push({x:cx,y:cy,r,vx:0,vy:0,shape,motion,moving});
  }
@@ -215,22 +254,37 @@ function detect(){
  previousGray=gray;paintTrail();
 }
 function drawCourtOverlay(){
- const points=calibrating?calibrationPoints:courtCorners;if(!points.length)return;
- ctx.save();ctx.lineWidth=Math.max(3,view.width/420);ctx.strokeStyle=calibrating?'#ffb454':'#75f0ae';ctx.fillStyle=calibrating?'rgba(255,180,84,.10)':'rgba(60,220,130,.08)';
- ctx.beginPath();points.forEach((p,i)=>{const px=p.x*view.width,py=p.y*view.height;i?ctx.lineTo(px,py):ctx.moveTo(px,py)});if(points.length===4)ctx.closePath();ctx.fill();ctx.stroke();
- points.forEach((p,i)=>{const px=p.x*view.width,py=p.y*view.height;ctx.beginPath();ctx.arc(px,py,Math.max(20,view.width/52),0,Math.PI*2);ctx.fillStyle=calibrating?'#ffb454':draggingCorner===i?'#ffb454':'#75f0ae';ctx.fill();ctx.strokeStyle='#102016';ctx.lineWidth=3;ctx.stroke();ctx.fillStyle='#0d1512';ctx.font='bold '+Math.max(13,view.width/60)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(String(i+1),px,py)});
- ctx.restore();
+ const points=calibrating?calibrationPoints:courtCorners;
+ if(points.length){
+  ctx.save();ctx.lineWidth=Math.max(3,view.width/420);ctx.strokeStyle=calibrating?'#ffb454':'#75f0ae';ctx.fillStyle=calibrating?'rgba(255,180,84,.10)':'rgba(60,220,130,.035)';
+  ctx.beginPath();points.forEach((p,i)=>{const px=p.x*view.width,py=p.y*view.height;i?ctx.lineTo(px,py):ctx.moveTo(px,py)});if(points.length===4)ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
+ }
+ if(courtCorners.length===4&&netLine.length===2&&netSideSign){
+  const p=courtPoints(),a={x:netLine[0].x*view.width,y:netLine[0].y*view.height},b={x:netLine[1].x*view.width,y:netLine[1].y*view.height};
+  const dx=b.x-a.x,dy=b.y-a.y,len=Math.max(1,Math.hypot(dx,dy)),nx=-dy/len*netSideSign,ny=dx/len*netSideSign,far=Math.max(view.width,view.height)*2;
+  ctx.save();ctx.beginPath();p.forEach((q,i)=>i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y));ctx.closePath();ctx.clip();
+  ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.lineTo(b.x+nx*far,b.y+ny*far);ctx.lineTo(a.x+nx*far,a.y+ny*far);ctx.closePath();ctx.fillStyle='rgba(75,220,135,.16)';ctx.fill();ctx.restore();
+  ctx.save();ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.strokeStyle='#ffd166';ctx.lineWidth=Math.max(4,view.width/300);ctx.setLineDash([12,8]);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle='#ffd166';[a,b].forEach(q=>{ctx.beginPath();ctx.arc(q.x,q.y,Math.max(10,view.width/80),0,Math.PI*2);ctx.fill()});
+  ctx.fillStyle='#fff';ctx.font='bold '+Math.max(15,view.width/70)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('NET',(a.x+b.x)/2,(a.y+b.y)/2);ctx.restore();
+  const labelX=(a.x+b.x)/2+nx*(courtAxis()?.span||view.width)*.22,labelY=(a.y+b.y)/2+ny*(courtAxis()?.span||view.width)*.22;
+  ctx.save();ctx.fillStyle='rgba(10,20,15,.75)';ctx.font='bold '+Math.max(14,view.width/75)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('MY SIDE',labelX,labelY);ctx.restore();
+ }
+ const handles=calibrating?calibrationPoints:courtCorners;
+ handles.forEach((p,i)=>{const px=p.x*view.width,py=p.y*view.height;ctx.beginPath();ctx.arc(px,py,Math.max(20,view.width/52),0,Math.PI*2);ctx.fillStyle=calibrating?'#ffb454':draggingCorner===i?'#ffb454':'#75f0ae';ctx.fill();ctx.strokeStyle='#102016';ctx.lineWidth=3;ctx.stroke();ctx.fillStyle='#0d1512';ctx.font='bold '+Math.max(13,view.width/60)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(String(i+1),px,py)});
+ const pending=netSetting?netPoints:[];
+ if(pending.length){ctx.save();ctx.beginPath();pending.forEach((p,i)=>{const px=p.x*view.width,py=p.y*view.height;i?ctx.lineTo(px,py):ctx.moveTo(px,py)});ctx.strokeStyle='#ffb454';ctx.lineWidth=Math.max(4,view.width/300);ctx.setLineDash([10,8]);ctx.stroke();ctx.setLineDash([]);pending.forEach(p=>{ctx.beginPath();ctx.arc(p.x*view.width,p.y*view.height,Math.max(12,view.width/65),0,Math.PI*2);ctx.fillStyle='#ffb454';ctx.fill()});ctx.restore()}
 }
 function drawOverlay(){
  drawCourtOverlay();
- if(lastBounce){ctx.save();ctx.beginPath();ctx.arc(lastBounce.x,lastBounce.y,Math.max(20,view.width/55),0,Math.PI*2);ctx.fillStyle=lastBounce.call==='IN'?'rgba(110,255,165,.25)':'rgba(255,100,100,.28)';ctx.fill();ctx.lineWidth=4;ctx.strokeStyle=lastBounce.call==='IN'?'#75f0ae':'#ff7373';ctx.stroke();ctx.fillStyle='#fff';ctx.font='bold '+Math.max(18,view.width/45)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(lastBounce.call,lastBounce.x,lastBounce.y);ctx.restore()}
+ if(lastBounce){ctx.save();ctx.beginPath();ctx.arc(lastBounce.x,lastBounce.y,Math.max(20,view.width/55),0,Math.PI*2);ctx.fillStyle=lastBounce.call!=='OUT'?'rgba(110,255,165,.25)':'rgba(255,100,100,.28)';ctx.fill();ctx.lineWidth=4;ctx.strokeStyle=lastBounce.call!=='OUT'?'#75f0ae':'#ff7373';ctx.stroke();ctx.fillStyle='#fff';ctx.font='bold '+Math.max(18,view.width/45)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(lastBounce.call==='LINE'?'IN':lastBounce.call,lastBounce.x,lastBounce.y);ctx.restore()}
  if(!track)return;
  ctx.beginPath();ctx.arc(track.x,track.y,Math.max(16,track.r*1.8),0,Math.PI*2);ctx.strokeStyle=lost?'rgba(255,180,84,.4)':'#ff9f2e';ctx.lineWidth=Math.max(4,view.width/260);ctx.stroke();
  ctx.beginPath();ctx.arc(track.x,track.y,Math.max(3,view.width/300),0,Math.PI*2);ctx.fillStyle='#ff9f2e';ctx.fill();
 }
-function saveCourt(){try{localStorage.setItem('aiTennisCourtCorners',JSON.stringify(courtCorners))}catch{}}
+function saveCourt(){try{localStorage.setItem('aiTennisCourtCorners',JSON.stringify({corners:courtCorners,netLine,netSideSign}))}catch{}}
 view.addEventListener('pointerdown',event=>{
- if(calibrating||courtCorners.length!==4)return;
+ if(calibrating||netSetting||courtCorners.length!==4)return;
  const q=cameraPointFromClick(event),x=q.x*view.width,y=q.y*view.height,hit=Math.max(32,view.width*.035);
  let nearest=-1,best=hit;
  courtCorners.forEach((p,i)=>{const d=Math.hypot(p.x*view.width-x,p.y*view.height-y);if(d<best){best=d;nearest=i}});
@@ -249,13 +303,26 @@ function finishCornerDrag(){
 view.addEventListener('pointerup',finishCornerDrag);
 view.addEventListener('pointercancel',finishCornerDrag);
 view.addEventListener('click',event=>{
+ const point=cameraPointFromClick(event);
+ if(netSetting===1){
+  netPoints.push(point);
+  if(netPoints.length===1){updateCourtUI();say('Tap the other end of the net',true);return}
+  const span=Math.hypot((netPoints[1].x-netPoints[0].x)*view.width,(netPoints[1].y-netPoints[0].y)*view.height);
+  if(span<Math.min(view.width,view.height)*.12){netPoints.pop();updateCourtUI();say('Tap the two ends across the full net · try again',true);return}
+  netSetting=2;updateCourtUI();say('Tap inside your side of the court',true);return;
+ }
+ if(netSetting===2){
+  const a={x:netPoints[0].x*view.width,y:netPoints[0].y*view.height},b={x:netPoints[1].x*view.width,y:netPoints[1].y*view.height},x=point.x*view.width,y=point.y*view.height;
+  const cross=(b.x-a.x)*(y-a.y)-(b.y-a.y)*(x-a.x);
+  if(Math.abs(cross)<Math.hypot(b.x-a.x,b.y-a.y)*12){say('Tap farther from the net on your side',true);return}
+  netLine=netPoints.slice(0,2);netSideSign=Math.sign(cross);netPoints=[];netSetting=0;bounceSamples=[];saveCourt();updateCourtUI();say('Net set · Tracking focused on your side',true);return;
+ }
  if(!calibrating)return;
- const point=cameraPointFromClick(event);calibrationPoints.push(point);
+ calibrationPoints.push(point);
  if(calibrationPoints.length===4){
   if(!validCorners(calibrationPoints)){say('Corners must go around the court in order; undo and retap',true);updateCourtUI();return}
-  courtCorners=calibrationPoints.slice();calibrationPoints=[];calibrating=false;bounceSamples=[];lastBounce=null;lastBounceTime=0;
-  try{localStorage.setItem('aiTennisCourtCorners',JSON.stringify(courtCorners))}catch{}
-  $('lastCall').textContent='—';$('lastCall').className='';updateCourtUI();say('Court calibrated · Start tracking for estimated bounce calls',true);
+  courtCorners=calibrationPoints.slice();netLine=[];netSideSign=0;netPoints=[];netSetting=0;calibrationPoints=[];calibrating=false;bounceSamples=[];lastBounce=null;lastBounceTime=0;saveCourt();
+  $('lastCall').textContent='—';$('lastCall').className='';updateCourtUI();say('Court calibrated · Set net for half-court tracking',true);
  }else{updateCourtUI();say('Court corner '+calibrationPoints.length+' of 4 · Tap clockwise around the outside edge',true)}
 });
 $('start').addEventListener('click',()=>stream?stopCamera():startCamera());
@@ -263,10 +330,21 @@ $('track').addEventListener('click',()=>{tracking=!tracking;$('track').textConte
 $('reset').addEventListener('click',()=>{clearTrack();previousGray=null;lastDetect=0;tracking=false;$('track').textContent='Start tracking';say(stream?'Session reset · Move the ball to reacquire':'Camera off',!!stream)});
 $('calibrate').addEventListener('click',()=>{
  if(calibrating){calibrating=false;calibrationPoints=[];updateCourtUI();say('Court setup cancelled',!!stream);return}
- if(!stream)return;calibrating=true;calibrationPoints=[];bounceSamples=[];updateCourtUI();say('Tap four court corners clockwise · Start at any corner',true);
+ if(!stream)return;netSetting=0;netPoints=[];calibrating=true;calibrationPoints=[];bounceSamples=[];updateCourtUI();say('Tap four court corners clockwise · Start at any corner',true);
 });
-$('undo').addEventListener('click',()=>{if(!calibrating||!calibrationPoints.length)return;calibrationPoints.pop();updateCourtUI();say('Court corner '+calibrationPoints.length+' of 4 · Tap clockwise around the outside edge',true)});
-$('clearCourt').addEventListener('click',()=>{courtCorners=[];calibrationPoints=[];calibrating=false;bounceSamples=[];lastBounce=null;lastBounceTime=0;try{localStorage.removeItem('aiTennisCourtCorners')}catch{};$('lastCall').textContent='—';$('lastCall').className='';updateCourtUI();say('Court calibration cleared',!!stream)});
+$('undo').addEventListener('click',()=>{
+ if(calibrating&&calibrationPoints.length){calibrationPoints.pop();updateCourtUI();say('Court corner '+calibrationPoints.length+' of 4 · Tap clockwise around the outside edge',true);return}
+ if(netSetting===2){netSetting=1;netPoints.pop();updateCourtUI();say('Tap the second end of the net',true);return}
+ if(netSetting===1&&netPoints.length){netPoints.pop();updateCourtUI();say('Tap the first end of the net',true)}
+});
+$('setNet').addEventListener('click',()=>{
+ if(netSetting){netSetting=0;netPoints=[];updateCourtUI();say('Net setup cancelled',!!stream);return}
+ if(courtCorners.length!==4||!stream)return;
+ calibrating=false;calibrationPoints=[];netSetting=1;netPoints=[];updateCourtUI();say('Tap one end of the net across the court',true);
+});
+$('clearNet').addEventListener('click',()=>{netLine=[];netSideSign=0;netPoints=[];netSetting=0;bounceSamples=[];saveCourt();updateCourtUI();say('Net filter cleared · Tracking whole court',!!stream)});
+$('voice').addEventListener('click',()=>{voiceEnabled=!voiceEnabled;updateCourtUI();if(!voiceEnabled&&window.speechSynthesis)window.speechSynthesis.cancel();say(voiceEnabled?'Umpire voice on · “Out” and line calls':'Umpire voice off',!!stream)});
+$('clearCourt').addEventListener('click',()=>{courtCorners=[];netLine=[];netSideSign=0;netPoints=[];netSetting=0;calibrationPoints=[];calibrating=false;bounceSamples=[];lastBounce=null;lastBounceTime=0;try{localStorage.removeItem('aiTennisCourtCorners')}catch{};$('lastCall').textContent='—';$('lastCall').className='';updateCourtUI();say('Court calibration cleared',!!stream)});
 updateCourtUI();
 })();
 </script></body></html>
