@@ -30,43 +30,44 @@ h2{font-size:16px;margin:0 0 7px}.trail{height:66px;background:#0d1712;border-ra
 <script>
 (()=>{'use strict';
 const $=id=>document.getElementById(id),video=$('video'),view=$('view'),ctx=view.getContext('2d'),trail=$('trail'),tctx=trail.getContext('2d');
-let stream=null,tracking=false,raf=0,lastDetect=0,frameN=0,fpsTime=0,history=[],track=null,lost=0,previousGray=null,globalMotion=0;
-const SW=480,work=document.createElement('canvas'),wc=work.getContext('2d',{willReadFrequently:true});let SH=270;
+let stream=null,tracking=false,raf=0,lastDetect=0,frameN=0,fpsTime=0,history=[],track=null,lost=0,previousGray=null,globalMotion=0,grayBuffer=null,changedBuffer=null,maskBuffer=null,seenBuffer=null,pixelStack=null,lastPaint=0;
+const SW=400,work=document.createElement('canvas'),wc=work.getContext('2d',{willReadFrequently:true});let SH=225;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 function say(s,on=false){$('status').textContent=s;$('dot').classList.toggle('on',on)}
 function clearTrack(){track=null;history=[];lost=0;$('lost').textContent='0';$('detected').textContent='--';$('confidence').textContent='--';paintTrail()}
 function paintTrail(){tctx.clearRect(0,0,trail.width,trail.height);if(history.length<2)return;tctx.beginPath();history.forEach((p,i)=>{const x=p.x/view.width*trail.width,y=p.y/view.height*trail.height;i?tctx.lineTo(x,y):tctx.moveTo(x,y)});tctx.strokeStyle='#ffad43';tctx.lineWidth=5;tctx.lineCap='round';tctx.lineJoin='round';tctx.stroke()}
-async function startCamera(){try{if(!navigator.mediaDevices?.getUserMedia)throw Error('Camera access requires HTTPS in Safari.');say('Requesting camera permission…');stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080},frameRate:{ideal:60}}});video.srcObject=stream;await video.play();view.width=video.videoWidth||1280;view.height=video.videoHeight||720;SH=Math.max(1,Math.round(SW*view.height/view.width));work.width=SW;work.height=SH;previousGray=null;lastDetect=0;$('start').textContent='Stop camera';$('track').disabled=false;say('Camera on · Press Start tracking',true);loop()}catch(e){say('Camera error: '+e.message)}}
+async function startCamera(){try{if(!navigator.mediaDevices?.getUserMedia)throw Error('Camera access requires HTTPS in Safari.');say('Requesting camera permission…');stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}}});video.srcObject=stream;await video.play();view.width=Math.min(1280,video.videoWidth||1280);view.height=Math.round(view.width*(video.videoHeight||720)/(video.videoWidth||1280));SH=Math.max(1,Math.round(SW*view.height/view.width));work.width=SW;work.height=SH;const pixels=SW*SH;grayBuffer=new Uint8Array(pixels);changedBuffer=new Uint8Array(pixels);maskBuffer=new Uint8Array(pixels);seenBuffer=new Uint8Array(pixels);pixelStack=new Int32Array(pixels);previousGray=null;lastDetect=0;lastPaint=0;$('start').textContent='Stop camera';$('track').disabled=false;say('Camera on · Press Start tracking',true);loop()}catch(e){say('Camera error: '+e.message)}}
 function stopCamera(){tracking=false;cancelAnimationFrame(raf);stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;$('start').textContent='Start camera';$('track').textContent='Start tracking';$('track').disabled=true;clearTrack();previousGray=null;say('Camera off')}
-function rgb2hsv(r,g,b){r/=255;g/=255;b/=255;const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0;if(d){if(mx===r)h=60*(((g-b)/d)%6);else if(mx===g)h=60*((b-r)/d+2);else h=60*((r-g)/d+4)}if(h<0)h+=360;return{h,s:mx?d/mx:0,v:mx}}
-function loop(){if(!stream)return;if(video.readyState>=2&&video.videoWidth){ctx.drawImage(video,0,0,view.width,view.height);if(tracking)detect();drawOverlay()}raf=requestAnimationFrame(loop)}
+function isTennisYellow(r,g,b){r/=255;g/=255;b/=255;const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0;if(d){if(mx===r)h=60*(((g-b)/d)%6);else if(mx===g)h=60*((b-r)/d+2);else h=60*((r-g)/d+4)}if(h<0)h+=360;return h>=34&&h<=90&&(mx?d/mx:0)>=.34&&mx>=.25}
+function loop(){if(!stream)return;raf=requestAnimationFrame(loop);try{if(video.readyState>=2&&video.videoWidth){const now=performance.now();if(now-lastPaint>=33){ctx.drawImage(video,0,0,view.width,view.height);if(tracking&&now-lastDetect>=65)detect();drawOverlay();lastPaint=now}}}catch(e){tracking=false;$('track').textContent='Start tracking';say('Tracking paused · '+e.message,true)}}
 function detect(){
- const now=performance.now();if(now-lastDetect<40)return;const elapsed=lastDetect?Math.max(.016,Math.min(.15,(now-lastDetect)/1000)):.04;lastDetect=now;
- wc.drawImage(video,0,0,SW,SH);const d=wc.getImageData(0,0,SW,SH).data,N=SW*SH,gray=new Uint8Array(N),changed=new Uint8Array(N),mask=new Uint8Array(N),seen=new Uint8Array(N);
+ const now=performance.now();if(now-lastDetect<65)return;const elapsed=lastDetect?Math.max(.016,Math.min(.15,(now-lastDetect)/1000)):.04;lastDetect=now;
+ wc.drawImage(video,0,0,SW,SH);const d=wc.getImageData(0,0,SW,SH).data,N=SW*SH,gray=grayBuffer,changed=changedBuffer,mask=maskBuffer,seen=seenBuffer;changed.fill(0);mask.fill(0);seen.fill(0);
  let changedTotal=0;
  for(let p=0,i=0;p<N;p++,i+=4){
-  const y=(d[i]*77+d[i+1]*150+d[i+2]*29)>>8;gray[p]=y;
+  const y=(d[i]*77+d[i+1]*150+d[i+2]*29)>>8;
   if(previousGray){const delta=Math.abs(y-previousGray[p]);if(delta>24){changed[p]=1;changedTotal++}}
+  gray[p]=y;
  }
  globalMotion=previousGray?changedTotal/N:0;
  const motionFloor=Math.max(.035,globalMotion*1.7+.018);
  const predicted=track?{x:track.x+track.vx*elapsed,y:track.y+track.vy*elapsed}:null;
  const gate=track?Math.min(view.width*.45,Math.max(view.width*.045,track.r*6+Math.hypot(track.vx,track.vy)*elapsed*2.8+view.width*.012)):Infinity;
  for(let y=1;y<SH-1;y++)for(let x=1;x<SW-1;x++){
-  const i=(y*SW+x)*4,h=rgb2hsv(d[i],d[i+1],d[i+2]);
-  if(h.h>=34&&h.h<=90&&h.s>=.34&&h.v>=.25)mask[y*SW+x]=1;
+  const i=(y*SW+x)*4;
+  if(isTennisYellow(d[i],d[i+1],d[i+2]))mask[y*SW+x]=1;
  }
  const candidates=[];
  for(let y=1;y<SH-1;y++)for(let x=1;x<SW-1;x++){
   const seed=y*SW+x;if(!mask[seed]||seen[seed])continue;
-  const stack=[seed];seen[seed]=1;let area=0,sx=0,sy=0,per=0,minx=x,maxx=x,miny=y,maxy=y;
-  while(stack.length){
-   const q=stack.pop(),qx=q%SW,qy=(q/SW)|0;area++;sx+=qx;sy+=qy;
+  let top=0;pixelStack[top++]=seed;seen[seed]=1;let area=0,sx=0,sy=0,per=0,minx=x,maxx=x,miny=y,maxy=y;
+  while(top){
+   const q=pixelStack[--top],qx=q%SW,qy=(q/SW)|0;area++;sx+=qx;sy+=qy;
    if(qx<minx)minx=qx;if(qx>maxx)maxx=qx;if(qy<miny)miny=qy;if(qy>maxy)maxy=qy;
    if(!mask[q-SW])per++;if(!mask[q+SW])per++;if(!mask[q-1])per++;if(!mask[q+1])per++;
    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
     if(!dx&&!dy)continue;const nx=qx+dx,ny=qy+dy,np=ny*SW+nx;
-    if(nx>0&&nx<SW-1&&ny>0&&ny<SH-1&&mask[np]&&!seen[np]){seen[np]=1;stack.push(np)}
+    if(nx>0&&nx<SW-1&&ny>0&&ny<SH-1&&mask[np]&&!seen[np]){seen[np]=1;pixelStack[top++]=np}
    }
   }
   const bw=maxx-minx+1,bh=maxy-miny+1,ratio=bw/bh,circ=per?4*Math.PI*area/(per*per):0,fill=area/(bw*bh),diam=(bw+bh)/2;
