@@ -46,8 +46,8 @@ h2{font-size:16px;margin:0 0 7px}.trail{height:66px;background:#0d1712;border-ra
 const $=id=>document.getElementById(id),video=$('video'),view=$('view'),ctx=view.getContext('2d'),trail=$('trail'),tctx=trail.getContext('2d');
 let stream=null,tracking=false,raf=0,lastDetect=0,frameN=0,fpsTime=0,history=[],track=null,lost=0,previousGray=null,globalMotion=0;
 let grayBuffer=null,changedBuffer=null,maskBuffer=null,seenBuffer=null,pixelStack=null,regionBuffer=null,lastPaint=0;
-let courtCorners=[],netCorners=[],calibrationPoints=[],calibrating=false,draggingCorner=-1,draggingNetCorner=-1,netSetting=0,netPoints=[],voiceEnabled=true,bounceSamples=[],bounceCount=0,inCount=0,outCount=0,lastBounce=null,lastBounceTime=0,pendingReacquire=null;
-const SW=512,work=document.createElement('canvas'),wc=work.getContext('2d',{willReadFrequently:true});let SH=225;
+let courtCorners=[],netCorners=[],calibrationPoints=[],calibrating=false,draggingCorner=-1,draggingNetCorner=-1,netSetting=0,netPoints=[],voiceEnabled=true,bounceSamples=[],bounceCount=0,inCount=0,outCount=0,lastBounce=null,lastBounceTime=0,pendingReacquire=null,holdFrames=0,detectInterval=1000/30;
+let SW=512;const work=document.createElement('canvas'),wc=work.getContext('2d',{willReadFrequently:true});let SH=288;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 function loadCourt(){try{const saved=JSON.parse(localStorage.getItem('aiTennisCourtCorners')||'null');if(saved&&saved.kind==='my-side-v2'&&Array.isArray(saved.corners)){courtCorners=saved.corners.length===4?saved.corners:[];netCorners=Array.isArray(saved.netCorners)&&saved.netCorners.length===4?saved.netCorners:[]}}catch{courtCorners=[];netCorners=[]}}
 function say(s,on=false){$('status').textContent=s;$('dot').classList.toggle('on',on)}
@@ -64,8 +64,8 @@ function updateCourtUI(){
  $('bounceCount').textContent=bounceCount;$('inCount').textContent=inCount;$('outCount').textContent=outCount;
 }
 function resetResults(){bounceCount=0;inCount=0;outCount=0;lastBounce=null;lastBounceTime=0;bounceSamples=[];$('lastCall').textContent='—';$('lastCall').className='';updateCourtUI()}
-function clearTrack(){track=null;history=[];lost=0;pendingReacquire=null;resetResults();$('lost').textContent='0';$('detected').textContent='--';$('confidence').textContent='--';paintTrail()}
-function paintTrail(){tctx.clearRect(0,0,trail.width,trail.height);if(history.length<2)return;tctx.beginPath();history.forEach((p,i)=>{const px=p.x/view.width*trail.width,py=p.y/view.height*trail.height;i?tctx.lineTo(px,py):tctx.moveTo(px,py)});tctx.strokeStyle='#ffad43';tctx.lineWidth=5;tctx.lineCap='round';tctx.lineJoin='round';tctx.stroke()}
+function clearTrack(){track=null;history=[];lost=0;pendingReacquire=null;holdFrames=0;resetResults();$('lost').textContent='0';$('detected').textContent='--';$('confidence').textContent='--';paintTrail()}
+function paintTrail(){tctx.clearRect(0,0,trail.width,trail.height);if(history.length<2)return;tctx.beginPath();history.forEach((p,i)=>{const px=p.x/view.width*trail.width,py=p.y/view.height*trail.height;i?tctx.lineTo(px,py):tctx.moveTo(px,py)});tctx.strokeStyle='#ffad43';tctx.lineWidth=3;tctx.lineCap='round';tctx.lineJoin='round';tctx.stroke()}
 function validCorners(points,minArea=.04){
  if(points.length!==4)return false;let sign=0,area=0;
  for(let i=0;i<4;i++){const a=points[i],b=points[(i+1)%4],c=points[(i+2)%4],cross=(b.x-a.x)*(c.y-b.y)-(b.y-a.y)*(c.x-b.x);if(Math.abs(cross)<.002)return false;const s=Math.sign(cross);if(sign&&s!==sign)return false;sign=s;area+=a.x*b.y-b.x*a.y}
@@ -168,7 +168,7 @@ function speakUmpire(call){
  synth.speak(utterance);return true;
 }
 function countBounce(x,y,r,time){
- if(time-lastBounceTime<320)return;
+ if(time-lastBounceTime<180)return;
  const call=classifyLanding(x,y,r),inCourt=call!=='OUT';
  bounceCount++;if(inCourt)inCount++;else outCount++;
  lastBounce={x,y,call,time};lastBounceTime=time;
@@ -181,7 +181,7 @@ function observeBounce(point,time){
  const long=(point.x*axis.x+point.y*axis.y)/span;
  bounceSamples.push({x:point.x,y:point.y,long,time,r:point.r});
  if(bounceSamples.length>10)bounceSamples.shift();
- if(bounceSamples.length<5||time-lastBounceTime<320)return;
+ if(bounceSamples.length<5||time-lastBounceTime<180)return;
  const n=bounceSamples.length;
  // Compare two-frame motion on each side of a possible impact. This confirms a
  // bounce as soon as the ball leaves the impact, rather than waiting for another
@@ -199,17 +199,19 @@ function observeBounce(point,time){
   const xFlip=before.x*after.x<0&&Math.abs(before.x)>.004&&Math.abs(after.x)>.004;
   const yFlip=before.y*after.y<0&&Math.abs(before.y)>.004&&Math.abs(after.y)>.004;
   const rebound=cosine<-.32&&(longFlip||xFlip||yFlip);
-  if(!rebound)continue;
+  const sizePeak=p.r>Math.max(a.r,d.r)*1.18&&p.r>Math.max(2,a.r+0.7,d.r+0.7);
+  if(!rebound&&!sizePeak)continue;
   const r=Math.max(p.r,a.r,d.r);
   countBounce(p.x,p.y,r,time);
   return;
  }
 }
 function confirmReacquire(candidate,time){
- if(pendingReacquire&&time-pendingReacquire.time<140&&Math.hypot(candidate.x-pendingReacquire.x,candidate.y-pendingReacquire.y)<view.width*.24){
-  pendingReacquire={x:candidate.x,y:candidate.y,time,count:pendingReacquire.count+1};
- }else pendingReacquire={x:candidate.x,y:candidate.y,time,count:1};
- return pendingReacquire.count>=2;
+ const displacement=pendingReacquire?Math.hypot(candidate.x-pendingReacquire.x,candidate.y-pendingReacquire.y):0;
+ const valid=pendingReacquire&&time-pendingReacquire.time<120&&displacement>=Math.max(.6,candidate.r*.08)&&displacement<view.width*.22;
+ if(valid)pendingReacquire={x:candidate.x,y:candidate.y,time,count:pendingReacquire.count+1,total:pendingReacquire.total+displacement};
+ else pendingReacquire={x:candidate.x,y:candidate.y,time,count:1,total:0};
+ return pendingReacquire.count>=3&&pendingReacquire.total>=Math.max(1.8,candidate.r*.24);
 }
 function cameraPointFromClick(event){
  const rect=view.getBoundingClientRect(),scale=Math.min(rect.width/view.width,rect.height/view.height),drawnW=view.width*scale,drawnH=view.height*scale,left=rect.left+(rect.width-drawnW)/2,top=rect.top+(rect.height-drawnH)/2;
@@ -222,7 +224,8 @@ async function startCamera(){
   stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60}}});
   video.srcObject=stream;await video.play();
   view.width=Math.min(1280,video.videoWidth||1280);view.height=Math.round(view.width*(video.videoHeight||720)/(video.videoWidth||1280));
-  SH=Math.max(1,Math.round(SW*view.height/view.width));work.width=SW;work.height=SH;
+  const workScale=640/Math.max(view.width,view.height);SW=Math.max(240,Math.round(view.width*workScale));SH=Math.max(240,Math.round(view.height*workScale));work.width=SW;work.height=SH;
+  const cameraRate=stream.getVideoTracks()[0]?.getSettings?.().frameRate||30;detectInterval=1000/Math.max(24,Math.min(60,cameraRate));
   const pixels=SW*SH;grayBuffer=new Uint8Array(pixels);changedBuffer=new Uint8Array(pixels);maskBuffer=new Uint8Array(pixels);seenBuffer=new Uint8Array(pixels);pixelStack=new Int32Array(pixels);regionBuffer=new Uint8Array(pixels);rebuildRegionMask();
   previousGray=null;lastDetect=0;lastPaint=0;$('start').textContent='Stop camera';$('track').disabled=false;updateCourtUI();
   say(courtCorners.length!==4?'Camera on · Calibrate your half':netCorners.length!==4?'Camera on · Set four net corners':'Camera ready · Start tracking on your half',true);loop();
@@ -241,11 +244,14 @@ function isTennisYellow(r,g,b){
 }
 function loop(){
  if(!stream)return;raf=requestAnimationFrame(loop);
- try{if(video.readyState>=2&&video.videoWidth){const now=performance.now();if(now-lastPaint>=33){ctx.drawImage(video,0,0,view.width,view.height);if(tracking&&now-lastDetect>=32)detect();drawOverlay();lastPaint=now}}}
+ try{if(video.readyState>=2&&video.videoWidth){const now=performance.now();
+  if(tracking&&now-lastDetect>=detectInterval*.88)detect();
+  if(now-lastPaint>=33){ctx.drawImage(video,0,0,view.width,view.height);drawOverlay();lastPaint=now}
+ }}
  catch(e){tracking=false;$('track').textContent='Start tracking';say('Tracking paused · '+e.message,true)}
 }
 function detect(){
- const now=performance.now();if(now-lastDetect<32)return;
+ const now=performance.now();if(now-lastDetect<Math.max(10,detectInterval*.88))return;
  const elapsed=lastDetect?Math.max(.008,Math.min(.12,(now-lastDetect)/1000)):.032;lastDetect=now;
  wc.drawImage(video,0,0,SW,SH);
  const rgba=wc.getImageData(0,0,SW,SH).data,pixelCount=SW*SH,gray=grayBuffer,changed=changedBuffer,colorMask=maskBuffer,visited=seenBuffer;
@@ -262,9 +268,9 @@ function detect(){
  for(let row=1;row<SH-1;row++)for(let col=1;col<SW-1;col++){
   const seed=row*SW+col;if(!colorMask[seed]||visited[seed])continue;
   let top=0;pixelStack[top++]=seed;visited[seed]=1;
-  let area=0,sumX=0,sumY=0,perimeter=0,minCol=col,maxCol=col,minRow=row,maxRow=row;
+  let area=0,sumX=0,sumY=0,perimeter=0,changedInBlob=0,minCol=col,maxCol=col,minRow=row,maxRow=row;
   while(top){
-   const q=pixelStack[--top],qx=q%SW,qy=(q/SW)|0;area++;sumX+=qx;sumY+=qy;
+   const q=pixelStack[--top],qx=q%SW,qy=(q/SW)|0;area++;sumX+=qx;sumY+=qy;if(changed[q])changedInBlob++;
    if(qx<minCol)minCol=qx;if(qx>maxCol)maxCol=qx;if(qy<minRow)minRow=qy;if(qy>maxRow)maxRow=qy;
    if(!colorMask[q-SW])perimeter++;if(!colorMask[q+SW])perimeter++;if(!colorMask[q-1])perimeter++;if(!colorMask[q+1])perimeter++;
    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){if(!dx&&!dy)continue;const nx=qx+dx,ny=qy+dy,np=ny*SW+nx;if(nx>0&&nx<SW-1&&ny>0&&ny<SH-1&&colorMask[np]&&!visited[np]){visited[np]=1;pixelStack[top++]=np}}
@@ -273,7 +279,7 @@ function detect(){
   if(area<6||area>1450||diam<2.5||diam>55)continue;
   const x0=Math.max(1,minCol-4),x1=Math.min(SW-2,maxCol+4),y0=Math.max(1,minRow-4),y1=Math.min(SH-2,maxRow+4);
   let localChanged=0,localArea=0;for(let rr=y0;rr<=y1;rr++)for(let cc=x0;cc<=x1;cc++){localArea++;localChanged+=changed[rr*SW+cc]}
-  const motionDensity=localChanged/Math.max(1,localArea),moving=!!previousGray&&localChanged>=3&&motionDensity>motionFloor;
+  const motionDensity=localChanged/Math.max(1,localArea),moving=!!previousGray&&changedInBlob>=Math.max(2,area*.16)&&localChanged>=3&&motionDensity>motionFloor;
   const roundBall=ratio>=.62&&ratio<=1.62&&fill>=.32&&circularity>=.36;
   const fastBlur=ratio>=.48&&ratio<=2.8&&fill>=.13&&circularity>=.16&&moving&&motionDensity>Math.max(.055,motionFloor*1.35);
   if(!roundBall&&!fastBlur)continue;
@@ -288,19 +294,19 @@ function detect(){
   for(const c of candidates){const distance=Math.hypot(c.x-predicted.x,c.y-predicted.y);if(distance>gate)continue;if(!c.moving){if(!held||distance<held.distance)held={c,distance};continue}const cost=c.shape+.18*(1-c.motion)+.40*distance/Math.max(1,gate);if(cost<best){best=cost;chosen=c}}
   if(!chosen&&movingCandidates.length){
    movingCandidates.sort((a,b)=>(a.shape-.48*a.motion)-(b.shape-.48*b.motion));const candidate=movingCandidates[0];
-   if(candidate.motion>.17&&candidate.shape<1.0&&sceneMotion<.16&&confirmReacquire(candidate,now))chosen=candidate;
+   if(candidate.motion>.20&&candidate.shape<1.0&&sceneMotion<.14&&confirmReacquire(candidate,now))chosen=candidate;
   }
   if(chosen){
-   pendingReacquire=null;const instantVx=(chosen.x-track.x)/elapsed,instantVy=(chosen.y-track.y)/elapsed,reversal=track.vx*instantVx+track.vy*instantVy<0,alpha=reversal?0.88:0.72;
+   pendingReacquire=null;holdFrames=0;const instantVx=(chosen.x-track.x)/elapsed,instantVy=(chosen.y-track.y)/elapsed,reversal=track.vx*instantVx+track.vy*instantVy<0,alpha=reversal?0.88:0.72;
    chosen.vx=track.vx*(1-alpha)+instantVx*alpha;chosen.vy=track.vy*(1-alpha)+instantVy*alpha;
    track=chosen;lost=0;history.push({x:chosen.x,y:chosen.y});if(history.length>64)history.shift();observeBounce(chosen,now);
    $('detected').textContent='LOCKED';$('confidence').textContent=Math.round(clamp(100-chosen.shape*60+chosen.motion*12,0,99))+'%';say('Ball locked · Tracking movement',true);
-  }else if(held){pendingReacquire=null;track.vx*=.75;track.vy*=.75;lost=0;$('detected').textContent='HOLDING';$('confidence').textContent='--';say('Ball held · Move to resume tracking',true)}
-  else{lost++;if(lost>8){track=null;bounceSamples=[]}$('detected').textContent=track?'PREDICTING':'SEARCHING';$('confidence').textContent='--';say(track?'Ball lost · Reacquiring':'Searching · Move the ball to reacquire',true)}
+  }else if(held&&holdFrames<2){pendingReacquire=null;holdFrames++;track.vx*=.65;track.vy*=.65;lost=0;$('detected').textContent='HOLDING';$('confidence').textContent='--';say('Ball held briefly · Waiting for movement',true)}
+  else{lost++;if(lost>6){track=null;bounceSamples=[];holdFrames=0}$('detected').textContent=track?'PREDICTING':'SEARCHING';$('confidence').textContent='--';say(track?'Ball lost · Reacquiring':'Searching · Move the ball to reacquire',true)}
  }else if(movingCandidates.length){
   movingCandidates.sort((a,b)=>(a.shape-.50*a.motion)-(b.shape-.50*b.motion));const candidate=movingCandidates[0];
   if(candidate.motion>.14&&candidate.shape<1.05&&confirmReacquire(candidate,now)){
-   candidate.vx=0;candidate.vy=0;track=candidate;lost=0;pendingReacquire=null;bounceSamples=[];history.push({x:candidate.x,y:candidate.y});observeBounce(candidate,now);
+   candidate.vx=0;candidate.vy=0;track=candidate;lost=0;holdFrames=0;pendingReacquire=null;bounceSamples=[];history.push({x:candidate.x,y:candidate.y});observeBounce(candidate,now);
    $('detected').textContent='LOCKED';$('confidence').textContent=Math.round(clamp(100-candidate.shape*60+candidate.motion*12,0,99))+'%';say('Ball locked · Tracking movement',true);
   }
  }else if(pendingReacquire&&now-pendingReacquire.time>150)pendingReacquire=null;
@@ -310,7 +316,7 @@ function detect(){
 function drawCourtOverlay(){
  const points=calibrating?calibrationPoints:courtCorners;
  if(points.length){
-  ctx.save();ctx.lineWidth=Math.max(3,view.width/420);ctx.strokeStyle=calibrating?'#ffb454':'#75f0ae';ctx.fillStyle=calibrating?'rgba(255,180,84,.10)':'rgba(60,220,130,.10)';
+  ctx.save();ctx.lineWidth=Math.max(3,view.width/420);ctx.strokeStyle=calibrating?'#ffb454':'#75f0ae';ctx.fillStyle=calibrating?'rgba(255,180,84,.08)':'rgba(60,220,130,.045)';
   ctx.beginPath();points.forEach((p,i)=>{const px=p.x*view.width,py=p.y*view.height;i?ctx.lineTo(px,py):ctx.moveTo(px,py)});if(points.length===4)ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
  }
  const handles=calibrating?calibrationPoints:courtCorners;
@@ -327,10 +333,10 @@ function drawCourtOverlay(){
 }
 function drawOverlay(){
  drawCourtOverlay();
- if(lastBounce){ctx.save();ctx.beginPath();ctx.arc(lastBounce.x,lastBounce.y,Math.max(20,view.width/55),0,Math.PI*2);ctx.fillStyle=lastBounce.call!=='OUT'?'rgba(110,255,165,.25)':'rgba(255,100,100,.28)';ctx.fill();ctx.lineWidth=4;ctx.strokeStyle=lastBounce.call!=='OUT'?'#75f0ae':'#ff7373';ctx.stroke();ctx.fillStyle='#fff';ctx.font='bold '+Math.max(18,view.width/45)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(lastBounce.call==='LINE'?'IN':lastBounce.call,lastBounce.x,lastBounce.y);ctx.restore()}
+ if(lastBounce){ctx.save();ctx.beginPath();ctx.arc(lastBounce.x,lastBounce.y,Math.max(9,view.width/150),0,Math.PI*2);ctx.fillStyle=lastBounce.call!=='OUT'?'rgba(110,255,165,.25)':'rgba(255,100,100,.28)';ctx.fill();ctx.lineWidth=4;ctx.strokeStyle=lastBounce.call!=='OUT'?'#75f0ae':'#ff7373';ctx.stroke();ctx.fillStyle='#fff';ctx.font='bold '+Math.max(18,view.width/45)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(lastBounce.call==='LINE'?'IN':lastBounce.call,lastBounce.x,lastBounce.y);ctx.restore()}
  if(!track)return;
- ctx.beginPath();ctx.arc(track.x,track.y,Math.max(16,track.r*1.8),0,Math.PI*2);ctx.strokeStyle=lost?'rgba(255,180,84,.4)':'#ff9f2e';ctx.lineWidth=Math.max(4,view.width/260);ctx.stroke();
- ctx.beginPath();ctx.arc(track.x,track.y,Math.max(3,view.width/300),0,Math.PI*2);ctx.fillStyle='#ff9f2e';ctx.fill();
+ ctx.beginPath();ctx.arc(track.x,track.y,Math.max(8,track.r*1.15),0,Math.PI*2);ctx.strokeStyle=lost?'rgba(255,180,84,.4)':'#ff9f2e';ctx.lineWidth=Math.max(2,view.width/480);ctx.stroke();
+ ctx.beginPath();ctx.arc(track.x,track.y,Math.max(3,view.width/420),0,Math.PI*2);ctx.fillStyle='#ff9f2e';ctx.fill();
 }
 function saveCourt(){try{localStorage.setItem('aiTennisCourtCorners',JSON.stringify({kind:'my-side-v2',corners:courtCorners,netCorners}))}catch{}rebuildRegionMask()}
 view.addEventListener('pointerdown',event=>{
