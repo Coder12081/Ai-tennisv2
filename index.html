@@ -7,7 +7,7 @@
 :root{color-scheme:dark;--bg:#0d1512;--panel:#182720;--line:#30483b;--mint:#b5f3c5;--muted:#a9bcb0;--orange:#ffb454}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f2f7f3;font:16px -apple-system,BlinkMacSystemFont,system-ui,sans-serif}
 main{max-width:920px;margin:auto;padding:16px;display:grid;gap:13px}.top{display:flex;justify-content:space-between;align-items:center;gap:10px}.eyebrow{color:var(--mint);font-size:11px;font-weight:800;letter-spacing:.14em}h1{font-size:25px;margin:4px 0}.sub,.help{color:var(--muted);font-size:13px;line-height:1.5}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:13px}.preview{position:relative;background:#050907;border-radius:11px;overflow:hidden;aspect-ratio:16/9;min-height:190px}.preview video,.preview canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.preview video{opacity:0}.preview canvas{touch-action:manipulation}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:13px}.preview{position:relative;background:#050907;border-radius:11px;overflow:hidden;aspect-ratio:16/9;min-height:190px}.preview video,.preview canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.preview video{opacity:0}.preview canvas{touch-action:none}
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}button{border:0;border-radius:10px;padding:11px 14px;font-weight:750;background:#2b4537;color:#f4fff6}button.primary{background:var(--mint);color:#102016}button:disabled{opacity:.4}
 .status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;margin-top:9px}.dot{width:8px;height:8px;border-radius:50%;background:#718078}.dot.on{background:var(--mint);box-shadow:0 0 9px #b5f3c5}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:11px}.stat{background:#22372c;border-radius:10px;padding:10px;min-width:0}.stat small{display:block;color:var(--muted);font-size:10px;letter-spacing:.06em}.stat strong{display:block;font-size:19px;margin-top:4px;overflow-wrap:anywhere}
@@ -44,7 +44,7 @@ h2{font-size:16px;margin:0 0 7px}.trail{height:66px;background:#0d1712;border-ra
 const $=id=>document.getElementById(id),video=$('video'),view=$('view'),ctx=view.getContext('2d'),trail=$('trail'),tctx=trail.getContext('2d');
 let stream=null,tracking=false,raf=0,lastDetect=0,frameN=0,fpsTime=0,history=[],track=null,lost=0,previousGray=null,globalMotion=0;
 let grayBuffer=null,changedBuffer=null,maskBuffer=null,seenBuffer=null,pixelStack=null,lastPaint=0;
-let courtCorners=loadCourt(),calibrationPoints=[],calibrating=false,bounceSamples=[],bounceCount=0,inCount=0,outCount=0,lastBounce=null,lastBounceTime=0,pendingReacquire=null;
+let courtCorners=loadCourt(),calibrationPoints=[],calibrating=false,draggingCorner=-1,bounceSamples=[],bounceCount=0,inCount=0,outCount=0,lastBounce=null,lastBounceTime=0,pendingReacquire=null;
 const SW=400,work=document.createElement('canvas'),wc=work.getContext('2d',{willReadFrequently:true});let SH=225;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 function loadCourt(){try{const points=JSON.parse(localStorage.getItem('aiTennisCourtCorners')||'[]');return Array.isArray(points)&&points.length===4&&points.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y))?points:[]}catch{return[]}}
@@ -97,18 +97,21 @@ function countBounce(x,y,r,time){
 }
 function observeBounce(point,time){
  const axis=courtAxis();if(!axis)return;
- const span=Math.max(1,axis.span),s=(point.x*axis.x+point.y*axis.y)/span;
- bounceSamples.push({x:point.x,y:point.y,s,time,r:point.r});if(bounceSamples.length>8)bounceSamples.shift();
- if(bounceSamples.length<5||time-lastBounceTime<550)return;
- const n=bounceSamples.length,a=bounceSamples[n-5],b=bounceSamples[n-3],c=bounceSamples[n-1];
- const dt1=(b.time-a.time)/1000,dt2=(c.time-b.time)/1000;
- if(dt1<=0||dt2<=0||dt1>.18||dt2>.18)return;
- const v1=(b.s-a.s)/dt1,v2=(c.s-b.s)/dt2;
- const dx1=(b.x-a.x)/span,dy1=(b.y-a.y)/span,dx2=(c.x-b.x)/span,dy2=(c.y-b.y)/span;
- const speed1=Math.hypot(dx1,dy1)/dt1,speed2=Math.hypot(dx2,dy2)/dt2;
- const cosine=(dx1*dx2+dy1*dy2)/Math.max(.0001,Math.hypot(dx1,dy1)*Math.hypot(dx2,dy2));
- const longFlip=v1*v2<0&&Math.abs(v1)>.28&&Math.abs(v2)>.28,sharpTurn=cosine<-.52&&speed1>.45&&speed2>.45;
- if(longFlip||sharpTurn)countBounce((b.x+c.x)/2,(b.y+c.y)/2,Math.max(b.r,c.r),time);
+ const span=Math.max(1,axis.span),projection=(point.x*axis.x+point.y*axis.y)/span;
+ bounceSamples.push({x:point.x,y:point.y,s:projection,time,r:point.r});if(bounceSamples.length>9)bounceSamples.shift();
+ if(bounceSamples.length<7||time-lastBounceTime<650)return;
+ const n=bounceSamples.length,a=bounceSamples[n-7],b=bounceSamples[n-6],c=bounceSamples[n-5],pivot=bounceSamples[n-4],e=bounceSamples[n-3],f=bounceSamples[n-2],g=bounceSamples[n-1];
+ const dtBefore=(pivot.time-a.time)/1000,dtAfter=(g.time-pivot.time)/1000;
+ if(dtBefore<=0||dtAfter<=0||dtBefore>.16||dtAfter>.16)return;
+ const pre1=pivot.s-a.s,pre2=pivot.s-b.s,post1=f.s-e.s,post2=g.s-f.s;
+ const consistentBefore=pre1*pre2>0,consistentAfter=post1*post2>0;
+ const vBefore=pre1/dtBefore,vAfter=(g.s-pivot.s)/dtAfter;
+ const dxBefore=(pivot.x-a.x)/span,dyBefore=(pivot.y-a.y)/span,dxAfter=(g.x-pivot.x)/span,dyAfter=(g.y-pivot.y)/span;
+ const speedBefore=Math.hypot(dxBefore,dyBefore)/dtBefore,speedAfter=Math.hypot(dxAfter,dyAfter)/dtAfter;
+ const cosine=(dxBefore*dxAfter+dyBefore*dyAfter)/Math.max(.0001,Math.hypot(dxBefore,dyBefore)*Math.hypot(dxAfter,dyAfter));
+ const longReversal=consistentBefore&&consistentAfter&&vBefore*vAfter<0&&Math.abs(vBefore)>.22&&Math.abs(vAfter)>.22;
+ const sharpReversal=cosine<-.48&&speedBefore>.38&&speedAfter>.38&&speedAfter<speedBefore*1.35;
+ if(longReversal||sharpReversal)countBounce(pivot.x,pivot.y,Math.max(pivot.r,point.r),time);
 }
 function confirmReacquire(candidate,time){
  if(pendingReacquire&&time-pendingReacquire.time<150&&Math.hypot(candidate.x-pendingReacquire.x,candidate.y-pendingReacquire.y)<view.width*.36){
@@ -215,7 +218,7 @@ function drawCourtOverlay(){
  const points=calibrating?calibrationPoints:courtCorners;if(!points.length)return;
  ctx.save();ctx.lineWidth=Math.max(3,view.width/420);ctx.strokeStyle=calibrating?'#ffb454':'#75f0ae';ctx.fillStyle=calibrating?'rgba(255,180,84,.10)':'rgba(60,220,130,.08)';
  ctx.beginPath();points.forEach((p,i)=>{const px=p.x*view.width,py=p.y*view.height;i?ctx.lineTo(px,py):ctx.moveTo(px,py)});if(points.length===4)ctx.closePath();ctx.fill();ctx.stroke();
- points.forEach((p,i)=>{const px=p.x*view.width,py=p.y*view.height;ctx.beginPath();ctx.arc(px,py,Math.max(13,view.width/55),0,Math.PI*2);ctx.fillStyle=calibrating?'#ffb454':'#75f0ae';ctx.fill();ctx.fillStyle='#0d1512';ctx.font='bold '+Math.max(13,view.width/60)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(String(i+1),px,py)});
+ points.forEach((p,i)=>{const px=p.x*view.width,py=p.y*view.height;ctx.beginPath();ctx.arc(px,py,Math.max(20,view.width/52),0,Math.PI*2);ctx.fillStyle=calibrating?'#ffb454':draggingCorner===i?'#ffb454':'#75f0ae';ctx.fill();ctx.strokeStyle='#102016';ctx.lineWidth=3;ctx.stroke();ctx.fillStyle='#0d1512';ctx.font='bold '+Math.max(13,view.width/60)+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(String(i+1),px,py)});
  ctx.restore();
 }
 function drawOverlay(){
@@ -225,6 +228,26 @@ function drawOverlay(){
  ctx.beginPath();ctx.arc(track.x,track.y,Math.max(16,track.r*1.8),0,Math.PI*2);ctx.strokeStyle=lost?'rgba(255,180,84,.4)':'#ff9f2e';ctx.lineWidth=Math.max(4,view.width/260);ctx.stroke();
  ctx.beginPath();ctx.arc(track.x,track.y,Math.max(3,view.width/300),0,Math.PI*2);ctx.fillStyle='#ff9f2e';ctx.fill();
 }
+function saveCourt(){try{localStorage.setItem('aiTennisCourtCorners',JSON.stringify(courtCorners))}catch{}}
+view.addEventListener('pointerdown',event=>{
+ if(calibrating||courtCorners.length!==4)return;
+ const q=cameraPointFromClick(event),x=q.x*view.width,y=q.y*view.height,hit=Math.max(32,view.width*.035);
+ let nearest=-1,best=hit;
+ courtCorners.forEach((p,i)=>{const d=Math.hypot(p.x*view.width-x,p.y*view.height-y);if(d<best){best=d;nearest=i}});
+ if(nearest<0)return;
+ draggingCorner=nearest;event.preventDefault();try{view.setPointerCapture(event.pointerId)}catch{}
+ say('Moving court corner '+(nearest+1)+' · Release to save',true);
+});
+view.addEventListener('pointermove',event=>{
+ if(draggingCorner<0)return;
+ const q=cameraPointFromClick(event);courtCorners[draggingCorner]=q;bounceSamples=[];event.preventDefault();
+});
+function finishCornerDrag(){
+ if(draggingCorner<0)return;
+ const n=draggingCorner+1;draggingCorner=-1;saveCourt();say('Court corner '+n+' saved · Check the outline against the tape',true);
+}
+view.addEventListener('pointerup',finishCornerDrag);
+view.addEventListener('pointercancel',finishCornerDrag);
 view.addEventListener('click',event=>{
  if(!calibrating)return;
  const point=cameraPointFromClick(event);calibrationPoints.push(point);
