@@ -1,122 +1,68 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#101a17">
-<title>AI Tennis Vision — Ball Tracker</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101a17"><title>AI Tennis Vision — Ball Tracker</title>
 <style>
 :root{color-scheme:dark;--bg:#0d1512;--panel:#182720;--line:#30483b;--mint:#b5f3c5;--muted:#a9bcb0;--orange:#ffb454}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f2f7f3;font:16px -apple-system,BlinkMacSystemFont,system-ui,sans-serif}
-main{max-width:900px;margin:auto;padding:18px;display:grid;gap:14px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px}.eyebrow{color:var(--mint);font-size:11px;font-weight:800;letter-spacing:.16em}h1{font-size:25px;margin:4px 0}.sub{color:var(--muted);font-size:13px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:17px;padding:14px}.preview{position:relative;background:#050907;border-radius:12px;overflow:hidden;min-height:210px;aspect-ratio:16/9}.preview video,.preview canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:fill}.preview video{opacity:0}.preview canvas{touch-action:manipulation}
-.controls{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}button{border:0;border-radius:11px;padding:12px 16px;font-weight:750;font-size:14px;background:#2b4537;color:#f4fff6}button.primary{background:var(--mint);color:#102016}button:disabled{opacity:.4}
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.stat{background:#22372c;border-radius:11px;padding:11px;min-width:0}.stat small{display:block;color:var(--muted);font-size:10px;letter-spacing:.08em}.stat strong{display:block;font-size:21px;margin-top:4px;overflow-wrap:anywhere}
-.status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;margin:10px 0 0}.dot{width:8px;height:8px;border-radius:50%;background:#718078}.dot.on{background:var(--mint);box-shadow:0 0 10px #b5f3c5}
-h2{font-size:16px;margin:0 0 8px}.help{color:var(--muted);font-size:13px;line-height:1.55;margin:8px 0 0}.trail{height:64px;background:#0d1712;border-radius:10px;width:100%;display:block}
-@media(max-width:520px){main{padding:12px}.stat{padding:9px}.stat strong{font-size:18px}}
-</style>
-</head>
-<body><main>
-<header class="top"><div><div class="eyebrow">COMPUTER VISION LAB · V1.5</div><h1>AI Tennis Vision</h1><div class="sub">Automatic tennis-ball detection & tracking</div></div><div class="eyebrow">AUTO TRACKER</div></header>
+main{max-width:920px;margin:auto;padding:16px;display:grid;gap:13px}.top{display:flex;justify-content:space-between;align-items:center;gap:10px}.eyebrow{color:var(--mint);font-size:11px;font-weight:800;letter-spacing:.14em}h1{font-size:25px;margin:4px 0}.sub,.help{color:var(--muted);font-size:13px;line-height:1.5}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:13px}.preview{position:relative;background:#050907;border-radius:11px;overflow:hidden;aspect-ratio:16/9;min-height:190px}.preview video,.preview canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.preview video{opacity:0}.preview canvas{touch-action:manipulation}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}button{border:0;border-radius:10px;padding:11px 14px;font-weight:750;background:#2b4537;color:#f4fff6}button.primary{background:var(--mint);color:#102016}button:disabled{opacity:.4}
+.status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;margin-top:9px}.dot{width:8px;height:8px;border-radius:50%;background:#718078}.dot.on{background:var(--mint);box-shadow:0 0 9px #b5f3c5}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:11px}.stat{background:#22372c;border-radius:10px;padding:10px;min-width:0}.stat small{display:block;color:var(--muted);font-size:10px;letter-spacing:.06em}.stat strong{display:block;font-size:19px;margin-top:4px;overflow-wrap:anywhere}
+h2{font-size:16px;margin:0 0 7px}.trail{height:66px;background:#0d1712;border-radius:9px;width:100%;display:block}.help{margin:8px 0 0}.key{color:var(--orange);font-weight:700}
+@media(max-width:520px){main{padding:10px}.stats{grid-template-columns:repeat(2,1fr)}}
+</style></head><body><main>
+<header class="top"><div><div class="eyebrow">COMPUTER VISION LAB · V2 AUTO</div><h1>AI Tennis Vision</h1><div class="sub">Automatic tennis-ball detection & tracking</div></div><div class="eyebrow">TRACKER 02</div></header>
 <section class="panel">
- <div class="preview" id="preview"><video id="video" playsinline muted autoplay></video><canvas id="view" width="960" height="540"></canvas></div>
- <div class="status"><span id="dot" class="dot"></span><span id="status">Camera off · Ready to start</span></div>
- <div class="controls"><button id="start" class="primary">Start camera</button><button id="track" disabled>Start tracking</button><button id="reset">Reset track</button></div>
- <div class="stats">
-  <div class="stat"><small>DETECTION</small><strong id="detected">--</strong></div>
-  <div class="stat"><small>MATCH SCORE</small><strong id="confidence">--</strong></div>
-  <div class="stat"><small>PROCESSING</small><strong id="fps">-- FPS</strong></div>
- </div>
- <p class="help" id="hint">Mount the iPad in landscape orientation with the whole taped court visible. Start the camera, then start tracking. Tracking starts automatically searching for a yellow tennis ball — no tapping or per-point calibration. The detector combines colour, blob shape, apparent size and motion prediction. It is a classical-vision prototype, not a trained neural network.</p>
+<div class="preview"><video id="video" playsinline muted autoplay></video><canvas id="view" width="960" height="540"></canvas></div>
+<div class="status"><span id="dot" class="dot"></span><span id="status">Camera off · Start camera</span></div>
+<div class="controls"><button id="start" class="primary">Start camera</button><button id="track" disabled>Start tracking</button><button id="reset">Reset</button></div>
+<div class="stats">
+<div class="stat"><small>TRACK STATE</small><strong id="detected">--</strong></div><div class="stat"><small>MATCH SCORE*</small><strong id="confidence">--</strong></div><div class="stat"><small>PROCESSING</small><strong id="fps">-- FPS</strong></div><div class="stat"><small>LOST FRAMES</small><strong id="lost">0</strong></div>
+</div>
+<p class="help"><span class="key">Automatic mode:</span> Start the camera, then press Start tracking. The tracker searches for tennis-ball yellow automatically — no tapping or per-point calibration. Keep the iPad still and use steady lighting.</p>
 </section>
-<section class="panel"><h2>Recent ball path</h2><canvas id="trail" class="trail" width="900" height="180"></canvas><p class="help">Large orange circle: detected ball. Orange line: recent ball path. No manual calibration is needed. Coordinates are camera-image pixels, not real-world court measurements.</p></section>
-<section class="panel"><h2>Build status</h2><p class="help">V1.5: automatic colour-based acquisition, shape/size filtering, motion prediction, reacquisition, a prominent orange ball marker and a visible orange trail. The match score is a heuristic, not a neural-network probability.</p></section>
+<section class="panel"><h2>Recent ball path</h2><canvas id="trail" class="trail" width="900" height="180"></canvas><p class="help">Only confirmed detections are drawn. Predicted positions are shown as a dashed ring and are not added to the measured path.</p></section>
+<section class="panel"><h2>How this version works</h2><p class="help">The detector searches for saturated tennis-ball yellow, filters candidates by shape and apparent size, and follows the best candidate using motion prediction. This is classical computer vision, not a trained neural network. The match score is a heuristic, not a probability.</p></section>
 </main>
 <script>
 (()=>{'use strict';
 const $=id=>document.getElementById(id),video=$('video'),view=$('view'),ctx=view.getContext('2d'),trail=$('trail'),tctx=trail.getContext('2d');
-let stream=null,tracking=false,raf=0,lastFrame=0,frameCount=0,fpsAt=0,history=[],last=null,misses=0,workCanvas=document.createElement('canvas'),workCtx=workCanvas.getContext('2d',{willReadFrequently:true});
-const W=480;let H=270;
-function status(s,on=false){$('status').textContent=s;$('dot').classList.toggle('on',on)}
-function reset(){history=[];last=null;misses=0;$('detected').textContent='--';$('confidence').textContent='--';drawTrail()}
-function drawTrail(){tctx.clearRect(0,0,trail.width,trail.height);tctx.strokeStyle='#b5f3c5';tctx.lineWidth=3;tctx.beginPath();history.forEach((p,i)=>{const x=p.x/view.width*trail.width,y=p.y/view.height*trail.height;if(i===0)tctx.moveTo(x,y);else tctx.lineTo(x,y)});tctx.stroke();if(history.length){const p=history[history.length-1];tctx.fillStyle='#ffb454';tctx.beginPath();tctx.arc(p.x/view.width*trail.width,p.y/view.height*trail.height,7,0,Math.PI*2);tctx.fill()}}
-async function startCamera(){try{if(!navigator.mediaDevices?.getUserMedia)throw new Error('Camera access needs Safari on an HTTPS website.');status('Requesting camera permission…');stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60}}});video.srcObject=stream;await video.play();const w=video.videoWidth||1280,h=video.videoHeight||720;view.width=w;view.height=h;$('preview').style.aspectRatio=w+'/'+h;H=Math.round(h*W/w);workCanvas.width=W;workCanvas.height=H;$('start').textContent='Stop camera';$('track').disabled=false;status('Camera on · Ready to track',true);render()}catch(e){status('Camera error: '+e.message)}}
-function stopCamera(){tracking=false;cancelAnimationFrame(raf);if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;$('start').textContent='Start camera';$('track').textContent='Start tracking';$('track').disabled=true;status('Camera off')}
-function render(){if(!stream)return;if(video.readyState>=2&&video.videoWidth){ctx.drawImage(video,0,0,view.width,view.height);}if(tracking)detect();if(last){ctx.beginPath();ctx.arc(last.x,last.y,Math.max(18,last.r*1.9),0,Math.PI*2);ctx.strokeStyle='#ff9f2e';ctx.lineWidth=Math.max(5,view.width/240);ctx.stroke();ctx.beginPath();ctx.arc(last.x,last.y,5,0,Math.PI*2);ctx.fillStyle='#ffb454';ctx.fill()}if(history.length>1){ctx.beginPath();history.forEach((p,i)=>{if(i===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y)});ctx.strokeStyle='rgba(255,180,84,.9)';ctx.lineWidth=Math.max(3,view.width/420);ctx.lineCap='round';ctx.lineJoin='round';ctx.stroke()}raf=requestAnimationFrame(render)}
-function rgbToHsv(r,g,b){
- const rn=r/255,gn=g/255,bn=b/255,mx=Math.max(rn,gn,bn),mn=Math.min(rn,gn,bn),d=mx-mn;
- let h=0;if(d){if(mx===rn)h=60*(((gn-bn)/d)%6);else if(mx===gn)h=60*((bn-rn)/d+2);else h=60*((rn-gn)/d+4)}
- if(h<0)h+=360;return {h,s:mx===0?0:d/mx,v:mx};
-}
+let stream=null,tracking=false,raf=0,lastDetect=0,frameN=0,fpsTime=0,history=[],track=null,lost=0;
+const SW=480,work=document.createElement('canvas'),wc=work.getContext('2d',{willReadFrequently:true});let SH=270;
+function say(s,on=false){$('status').textContent=s;$('dot').classList.toggle('on',on)}
+function clearTrack(){track=null;history=[];lost=0;$('lost').textContent='0';$('detected').textContent='--';$('confidence').textContent='--';paintTrail()}
+function paintTrail(){tctx.clearRect(0,0,trail.width,trail.height);if(history.length<2)return;tctx.beginPath();history.forEach((p,i)=>{const x=p.x/view.width*trail.width,y=p.y/view.height*trail.height;i?tctx.lineTo(x,y):tctx.moveTo(x,y)});tctx.strokeStyle='#ffad43';tctx.lineWidth=5;tctx.lineCap='round';tctx.lineJoin='round';tctx.stroke()}
+async function startCamera(){try{if(!navigator.mediaDevices?.getUserMedia)throw Error('Camera access requires HTTPS in Safari.');say('Requesting camera permission…');stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080},frameRate:{ideal:60}}});video.srcObject=stream;await video.play();view.width=video.videoWidth||1280;view.height=video.videoHeight||720;SH=Math.max(1,Math.round(SW*view.height/view.width));work.width=SW;work.height=SH;$('start').textContent='Stop camera';$('track').disabled=false;say('Camera on · Press Start tracking',true);loop()}catch(e){say('Camera error: '+e.message)}}
+function stopCamera(){tracking=false;cancelAnimationFrame(raf);stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;$('start').textContent='Start camera';$('track').textContent='Start tracking';$('track').disabled=true;clearTrack();say('Camera off')}
+function rgb2hsv(r,g,b){r/=255;g/=255;b/=255;const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0;if(d){if(mx===r)h=60*(((g-b)/d)%6);else if(mx===g)h=60*((b-r)/d+2);else h=60*((r-g)/d+4)}if(h<0)h+=360;return{h,s:mx?d/mx:0,v:mx}}
+function loop(){if(!stream)return;if(video.readyState>=2&&video.videoWidth){ctx.drawImage(video,0,0,view.width,view.height);if(tracking)detect();drawOverlay()}raf=requestAnimationFrame(loop)}
 function detect(){
- const now=performance.now();if(now-lastFrame<25)return;lastFrame=now;
- workCtx.drawImage(video,0,0,W,H);
- const data=workCtx.getImageData(0,0,W,H).data,total=W*H,mask=new Uint8Array(total),seen=new Uint8Array(total);
- // Tennis-ball yellow/ yellow-green. HSV separates yellow from the dark brown floor far better than broad RGB tests.
- for(let p=0,i=0;p<total;p++,i+=4){
-  const hsv=rgbToHsv(data[i],data[i+1],data[i+2]);
-  if(hsv.h>=34&&hsv.h<=88&&hsv.s>=.30&&hsv.v>=.26)mask[p]=1;
- }
+ const now=performance.now();if(now-lastDetect<24)return;const elapsed=lastDetect?Math.max(.016,Math.min(.12,(now-lastDetect)/1000)):.033;lastDetect=now;
+ wc.drawImage(video,0,0,SW,SH);const d=wc.getImageData(0,0,SW,SH).data,N=SW*SH,mask=new Uint8Array(N),seen=new Uint8Array(N);
+ const predicted=track?{x:(track.x+track.vx*elapsed)*SW/view.width,y:(track.y+track.vy*elapsed)*SH/view.height}:null;
+ const speed=track?Math.hypot(track.vx,track.vy)*SW/view.width:0;
+ const gate=track?Math.min(SW*.48,Math.max(22,track.r*SW/view.width*6+speed*elapsed*3+12)):Infinity;
+ for(let y=1;y<SH-1;y++)for(let x=1;x<SW-1;x++){if(predicted&&Math.hypot(x-predicted.x,y-predicted.y)>gate)continue;const i=(y*SW+x)*4,h=rgb2hsv(d[i],d[i+1],d[i+2]);if(h.h>=34&&h.h<=91&&h.s>=.30&&h.v>=.24)mask[y*SW+x]=1}
  const candidates=[];
- for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
-  const seed=y*W+x;if(!mask[seed]||seen[seed])continue;
-  const stack=[seed];seen[seed]=1;let n=0,sx=0,sy=0,perimeter=0,minx=x,maxx=x,miny=y,maxy=y;
-  while(stack.length){
-   const q=stack.pop(),qx=q%W,qy=(q/W)|0;n++;sx+=qx;sy+=qy;
-   minx=Math.min(minx,qx);maxx=Math.max(maxx,qx);miny=Math.min(miny,qy);maxy=Math.max(maxy,qy);
-   // Four-edge perimeter gives a useful circularity estimate for each connected colour blob.
-   if(!mask[q-W])perimeter++;if(!mask[q+W])perimeter++;if(!mask[q-1])perimeter++;if(!mask[q+1])perimeter++;
-   for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
-    if(!dx&&!dy)continue;const nx=qx+dx,ny=qy+dy,np=ny*W+nx;
-    if(nx<=0||nx>=W-1||ny<=0||ny>=H-1)continue;
-    if(mask[np]&&!seen[np]){seen[np]=1;stack.push(np)}
-   }
-  }
-  const bw=maxx-minx+1,bh=maxy-miny+1,ratio=bw/bh,fill=n/(bw*bh),circularity=perimeter?4*Math.PI*n/(perimeter*perimeter):0;
-  const diameter=(bw+bh)/2;
-  // Size range is deliberately broad for perspective, but rejects large floor patches and tiny noise.
-  if(n<6||n>600||diameter<2.5||diameter>29||ratio<.66||ratio>1.52||fill<.35||circularity<.40)continue;
-  const cx=sx/n/W*view.width,cy=sy/n/H*view.height;
-  candidates.push({x:cx,y:cy,r:diameter/2*view.width/W,circularity,ratio,fill,area:n});
+ for(let y=1;y<SH-1;y++)for(let x=1;x<SW-1;x++){
+  const seed=y*SW+x;if(!mask[seed]||seen[seed])continue;const stack=[seed];seen[seed]=1;let area=0,sx=0,sy=0,per=0,minx=x,maxx=x,miny=y,maxy=y;
+  while(stack.length){const q=stack.pop(),qx=q%SW,qy=(q/SW)|0;area++;sx+=qx;sy+=qy;if(qx<minx)minx=qx;if(qx>maxx)maxx=qx;if(qy<miny)miny=qy;if(qy>maxy)maxy=qy;if(!mask[q-SW])per++;if(!mask[q+SW])per++;if(!mask[q-1])per++;if(!mask[q+1])per++;for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){if(!dx&&!dy)continue;const nx=qx+dx,ny=qy+dy,np=ny*SW+nx;if(nx>0&&nx<SW-1&&ny>0&&ny<SH-1&&mask[np]&&!seen[np]){seen[np]=1;stack.push(np)}}}
+  const bw=maxx-minx+1,bh=maxy-miny+1,ratio=bw/bh,circ=per?4*Math.PI*area/(per*per):0,fill=area/(bw*bh),diam=(bw+bh)/2;
+  if(area<5||area>520||diam<2.2||diam>38||ratio<.62||ratio>1.58||fill<.32||circ<.34)continue;
+  const cx=sx/area*view.width/SW,cy=sy/area*view.height/SH,r=diam/2*view.width/SW;let cost=(1-circ)*.45+(1-fill)*.20+Math.abs(1-ratio)*.18;
+  if(track){const dist=Math.hypot(cx-predicted.x*view.width/SW,cy-predicted.y*view.height/SH),gateFull=gate*view.width/SW;if(dist>gateFull)continue;cost+=.42*dist/Math.max(1,gateFull);cost+=Math.min(.3,Math.abs(Math.log(Math.max(1,r)/Math.max(1,track.r)))*.16)}else cost+=Math.abs(Math.log(Math.max(1,diam)/8))*.025;
+  candidates.push({x:cx,y:cy,r,circ,fill,cost});
  }
- let chosen=null,score=0;
- if(last){
-  // Predict using the last measured velocity. A wider gate lets a fast ball move farther between frames.
-  const dt=Math.max(.5,Math.min(3,(now-(last.time||now))/33.3));
-  const px=last.x+(last.vx||0)*dt,py=last.y+(last.vy||0)*dt;
-  let best=Infinity;
-  for(const c of candidates){
-   const d=Math.hypot(c.x-px,c.y-py),gate=Math.max(view.width*.065,last.r*5.5,Math.hypot(last.vx||0,last.vy||0)*dt*1.8+last.r*2);
-   if(d>gate)continue;
-   const sizeChange=Math.abs(Math.log(Math.max(1,c.r)/Math.max(1,last.r)));
-   const cost=.58*d/gate+.22*sizeChange+.20*(1-c.circularity);
-   if(cost<best){best=cost;chosen=c;score=Math.max(0,Math.min(99,Math.round((1-cost)*100)))}
-  }
-  if(chosen){
-   const elapsed=Math.max(1,now-(last.time||now));
-   const vx=(chosen.x-last.x)/elapsed*33.3,vy=(chosen.y-last.y)/elapsed*33.3;
-   chosen.vx=(last.vx||0)*.35+vx*.65;chosen.vy=(last.vy||0)*.35+vy*.65;chosen.time=now;
-  }
- }else if(candidates.length){
-  // With no active track, prefer round, plausible-sized blobs; don't simply choose the brightest patch.
-  candidates.sort((a,b)=>(b.circularity-Math.abs(1-b.ratio)*.15)-(a.circularity-Math.abs(1-a.ratio)*.15));
-  chosen=candidates[0];score=Math.round(Math.max(0,Math.min(99,chosen.circularity*85)));
-  chosen.vx=0;chosen.vy=0;chosen.time=now;
- }
- if(chosen){
-  misses=0;last=chosen;history.push({x:chosen.x,y:chosen.y});if(history.length>45)history.shift();
-  $('detected').textContent='LOCKED';$('confidence').textContent=score+'%';
- }else{
-  misses++;$('detected').textContent=misses<12&&last?'PREDICTING':'SEARCHING';$('confidence').textContent='--';
-  // Keep the last velocity briefly so the tracker can reacquire the ball after motion blur/occlusion.
-  if(misses>=12)last=null;
- }
- frameCount++;if(now-fpsAt>=1000){$('fps').textContent=Math.round(frameCount*1000/(now-fpsAt))+' FPS';frameCount=0;fpsAt=now}
- drawTrail();
+ candidates.sort((a,b)=>a.cost-b.cost);const best=candidates[0];
+ if(best&&best.cost<(track?.92:1.02)){if(track){const vx=(best.x-track.x)/elapsed,vy=(best.y-track.y)/elapsed;best.vx=track.vx*.58+vx*.42;best.vy=track.vy*.58+vy*.42}else{best.vx=0;best.vy=0}best.time=now;track=best;lost=0;history.push({x:best.x,y:best.y});if(history.length>42)history.shift();$('detected').textContent='LOCKED';$('confidence').textContent=Math.round(Math.max(0,100-best.cost*70))+'%'}else{lost++;if(lost>7)track=null;$('detected').textContent=track?'PREDICTING':'SEARCHING';$('confidence').textContent='--'}
+ $('lost').textContent=lost;frameN++;if(now-fpsTime>1000){$('fps').textContent=Math.round(frameN*1000/(now-fpsTime))+' FPS';frameN=0;fpsTime=now}paintTrail();
 }
+function drawOverlay(){if(track){ctx.beginPath();ctx.arc(track.x,track.y,Math.max(16,track.r*1.8),0,Math.PI*2);ctx.strokeStyle='#ff9f2e';ctx.lineWidth=Math.max(4,view.width/260);ctx.stroke();ctx.beginPath();ctx.arc(track.x,track.y,Math.max(3,view.width/300),0,Math.PI*2);ctx.fillStyle='#ff9f2e';ctx.fill()}}
 $('start').addEventListener('click',()=>stream?stopCamera():startCamera());
-$('track').addEventListener('click',()=>{tracking=!tracking;$('track').textContent=tracking?'Pause tracking':'Start tracking';if(tracking){reset();status('Tracking · Searching for yellow ball',true)}else status('Camera on · Tracking paused',true)});
-$('reset').addEventListener('click',reset);
+$('track').addEventListener('click',()=>{tracking=!tracking;$('track').textContent=tracking?'Pause tracking':'Start tracking';if(tracking){clearTrack();say('Tracking · Searching automatically for tennis ball',true)}else say('Tracking paused',true)});
+$('reset').addEventListener('click',()=>{clearTrack();tracking=false;$('track').textContent='Start tracking';say(stream?'Reset · Press Start tracking':'Camera off',!!stream)});
 })();
 </script></body></html>
