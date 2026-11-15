@@ -36,86 +36,105 @@ const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 function say(s,on=false){$('status').textContent=s;$('dot').classList.toggle('on',on)}
 function clearTrack(){track=null;history=[];lost=0;$('lost').textContent='0';$('detected').textContent='--';$('confidence').textContent='--';paintTrail()}
 function paintTrail(){tctx.clearRect(0,0,trail.width,trail.height);if(history.length<2)return;tctx.beginPath();history.forEach((p,i)=>{const x=p.x/view.width*trail.width,y=p.y/view.height*trail.height;i?tctx.lineTo(x,y):tctx.moveTo(x,y)});tctx.strokeStyle='#ffad43';tctx.lineWidth=5;tctx.lineCap='round';tctx.lineJoin='round';tctx.stroke()}
-async function startCamera(){try{if(!navigator.mediaDevices?.getUserMedia)throw Error('Camera access requires HTTPS in Safari.');say('Requesting camera permission…');stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}}});video.srcObject=stream;await video.play();view.width=Math.min(1280,video.videoWidth||1280);view.height=Math.round(view.width*(video.videoHeight||720)/(video.videoWidth||1280));SH=Math.max(1,Math.round(SW*view.height/view.width));work.width=SW;work.height=SH;const pixels=SW*SH;grayBuffer=new Uint8Array(pixels);changedBuffer=new Uint8Array(pixels);maskBuffer=new Uint8Array(pixels);seenBuffer=new Uint8Array(pixels);pixelStack=new Int32Array(pixels);previousGray=null;lastDetect=0;lastPaint=0;$('start').textContent='Stop camera';$('track').disabled=false;say('Camera on · Press Start tracking',true);loop()}catch(e){say('Camera error: '+e.message)}}
+async function startCamera(){try{if(!navigator.mediaDevices?.getUserMedia)throw Error('Camera access requires HTTPS in Safari.');say('Requesting camera permission…');stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60}}});video.srcObject=stream;await video.play();view.width=Math.min(1280,video.videoWidth||1280);view.height=Math.round(view.width*(video.videoHeight||720)/(video.videoWidth||1280));SH=Math.max(1,Math.round(SW*view.height/view.width));work.width=SW;work.height=SH;const pixels=SW*SH;grayBuffer=new Uint8Array(pixels);changedBuffer=new Uint8Array(pixels);maskBuffer=new Uint8Array(pixels);seenBuffer=new Uint8Array(pixels);pixelStack=new Int32Array(pixels);previousGray=null;lastDetect=0;lastPaint=0;$('start').textContent='Stop camera';$('track').disabled=false;say('Camera on · Press Start tracking',true);loop()}catch(e){say('Camera error: '+e.message)}}
 function stopCamera(){tracking=false;cancelAnimationFrame(raf);stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;$('start').textContent='Start camera';$('track').textContent='Start tracking';$('track').disabled=true;clearTrack();previousGray=null;say('Camera off')}
 function isTennisYellow(r,g,b){r/=255;g/=255;b/=255;const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0;if(d){if(mx===r)h=60*(((g-b)/d)%6);else if(mx===g)h=60*((b-r)/d+2);else h=60*((r-g)/d+4)}if(h<0)h+=360;return h>=34&&h<=90&&(mx?d/mx:0)>=.34&&mx>=.25}
-function loop(){if(!stream)return;raf=requestAnimationFrame(loop);try{if(video.readyState>=2&&video.videoWidth){const now=performance.now();if(now-lastPaint>=33){ctx.drawImage(video,0,0,view.width,view.height);if(tracking&&now-lastDetect>=65)detect();drawOverlay();lastPaint=now}}}catch(e){tracking=false;$('track').textContent='Start tracking';say('Tracking paused · '+e.message,true)}}
+function loop(){if(!stream)return;raf=requestAnimationFrame(loop);try{if(video.readyState>=2&&video.videoWidth){const now=performance.now();if(now-lastPaint>=33){ctx.drawImage(video,0,0,view.width,view.height);if(tracking&&now-lastDetect>=32)detect();drawOverlay();lastPaint=now}}}catch(e){tracking=false;$('track').textContent='Start tracking';say('Tracking paused · '+e.message,true)}}
 function detect(){
- const now=performance.now();if(now-lastDetect<65)return;const elapsed=lastDetect?Math.max(.016,Math.min(.15,(now-lastDetect)/1000)):.04;lastDetect=now;
- wc.drawImage(video,0,0,SW,SH);const d=wc.getImageData(0,0,SW,SH).data,N=SW*SH,gray=grayBuffer,changed=changedBuffer,mask=maskBuffer,seen=seenBuffer;changed.fill(0);mask.fill(0);seen.fill(0);
- let changedTotal=0;
- for(let p=0,i=0;p<N;p++,i+=4){
-  const y=(d[i]*77+d[i+1]*150+d[i+2]*29)>>8;
-  if(previousGray){const delta=Math.abs(y-previousGray[p]);if(delta>24){changed[p]=1;changedTotal++}}
-  gray[p]=y;
+ const now=performance.now();if(now-lastDetect<32)return;
+ const elapsed=lastDetect?Math.max(.008,Math.min(.12,(now-lastDetect)/1000)):.032;lastDetect=now;
+ wc.drawImage(video,0,0,SW,SH);
+ const rgba=wc.getImageData(0,0,SW,SH).data,pixelCount=SW*SH;
+ const gray=grayBuffer,changed=changedBuffer,colorMask=maskBuffer,visited=seenBuffer;
+ changed.fill(0);colorMask.fill(0);visited.fill(0);
+ let changedPixels=0;
+ for(let p=0,k=0;p<pixelCount;p++,k+=4){
+  const luminance=(rgba[k]*77+rgba[k+1]*150+rgba[k+2]*29)>>8;
+  if(previousGray&&Math.abs(luminance-previousGray[p])>22){changed[p]=1;changedPixels++}
+  gray[p]=luminance;
  }
- globalMotion=previousGray?changedTotal/N:0;
- const motionFloor=Math.max(.035,globalMotion*1.7+.018);
+ const sceneMotion=previousGray?changedPixels/pixelCount:0;
+ const motionFloor=Math.max(.028,sceneMotion*1.8+.014);
  const predicted=track?{x:track.x+track.vx*elapsed,y:track.y+track.vy*elapsed}:null;
- const gate=track?Math.min(view.width*.45,Math.max(view.width*.045,track.r*6+Math.hypot(track.vx,track.vy)*elapsed*2.8+view.width*.012)):Infinity;
- for(let y=1;y<SH-1;y++)for(let x=1;x<SW-1;x++){
-  const i=(y*SW+x)*4;
-  if(isTennisYellow(d[i],d[i+1],d[i+2]))mask[y*SW+x]=1;
+ const gate=track?Math.min(view.width*.48,Math.max(view.width*.04,track.r*5+Math.hypot(track.vx,track.vy)*elapsed*2.4+view.width*.008)):Infinity;
+ for(let row=1;row<SH-1;row++)for(let col=1;col<SW-1;col++){
+  const k=(row*SW+col)*4;
+  if(isTennisYellow(rgba[k],rgba[k+1],rgba[k+2]))colorMask[row*SW+col]=1;
  }
  const candidates=[];
- for(let y=1;y<SH-1;y++)for(let x=1;x<SW-1;x++){
-  const seed=y*SW+x;if(!mask[seed]||seen[seed])continue;
-  let top=0;pixelStack[top++]=seed;seen[seed]=1;let area=0,sx=0,sy=0,per=0,minx=x,maxx=x,miny=y,maxy=y;
+ for(let row=1;row<SH-1;row++)for(let col=1;col<SW-1;col++){
+  const seed=row*SW+col;if(!colorMask[seed]||visited[seed])continue;
+  let top=0;pixelStack[top++]=seed;visited[seed]=1;
+  let area=0,sumX=0,sumY=0,perimeter=0,minCol=col,maxCol=col,minRow=row,maxRow=row;
   while(top){
-   const q=pixelStack[--top],qx=q%SW,qy=(q/SW)|0;area++;sx+=qx;sy+=qy;
-   if(qx<minx)minx=qx;if(qx>maxx)maxx=qx;if(qy<miny)miny=qy;if(qy>maxy)maxy=qy;
-   if(!mask[q-SW])per++;if(!mask[q+SW])per++;if(!mask[q-1])per++;if(!mask[q+1])per++;
+   const q=pixelStack[--top],qx=q%SW,qy=(q/SW)|0;area++;sumX+=qx;sumY+=qy;
+   if(qx<minCol)minCol=qx;if(qx>maxCol)maxCol=qx;if(qy<minRow)minRow=qy;if(qy>maxRow)maxRow=qy;
+   if(!colorMask[q-SW])perimeter++;if(!colorMask[q+SW])perimeter++;if(!colorMask[q-1])perimeter++;if(!colorMask[q+1])perimeter++;
    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
-    if(!dx&&!dy)continue;const nx=qx+dx,ny=qy+dy,np=ny*SW+nx;
-    if(nx>0&&nx<SW-1&&ny>0&&ny<SH-1&&mask[np]&&!seen[np]){seen[np]=1;pixelStack[top++]=np}
+    if(!dx&&!dy)continue;
+    const nx=qx+dx,ny=qy+dy,np=ny*SW+nx;
+    if(nx>0&&nx<SW-1&&ny>0&&ny<SH-1&&colorMask[np]&&!visited[np]){visited[np]=1;pixelStack[top++]=np}
    }
   }
-  const bw=maxx-minx+1,bh=maxy-miny+1,ratio=bw/bh,circ=per?4*Math.PI*area/(per*per):0,fill=area/(bw*bh),diam=(bw+bh)/2;
-  // Reject court lines and tape: balls form compact, round blobs in a plausible size range.
-  if(area<5||area>420||diam<2.2||diam>30||ratio<.68||ratio>1.46||fill<.40||circ<.46)continue;
-  const x=sx/area*view.width/SW,y=sy/area*view.height/SH,r=diam/2*view.width/SW;
-  const x0=Math.max(1,minx-3),x1=Math.min(SW-2,maxx+3),y0=Math.max(1,miny-3),y1=Math.min(SH-2,maxy+3);
-  let localChanged=0,localN=0;
-  for(let yy=y0;yy<=y1;yy++)for(let xx=x0;xx<=x1;xx++){localN++;localChanged+=changed[yy*SW+xx]}
-  const motionDensity=localChanged/Math.max(1,localN),moving=previousGray&&localChanged>=3&&motionDensity>motionFloor;
-  const motion=clamp((motionDensity-motionFloor)/.24,0,1);
-  const shape=(1-circ)*.48+(1-fill)*.22+Math.abs(1-ratio)*.22+Math.abs(Math.log(Math.max(1,diam)/8))*.025;
-  candidates.push({x,y,r,vx:0,vy:0,circ,fill,shape,motion,moving,cost:shape+.26*(1-motion)});
+  const boxW=maxCol-minCol+1,boxH=maxRow-minRow+1,ratio=boxW/boxH;
+  const circularity=perimeter?4*Math.PI*area/(perimeter*perimeter):0,fill=area/(boxW*boxH),diam=(boxW+boxH)/2;
+  if(area<4||area>900||diam<2||diam>42)continue;
+  const x0=Math.max(1,minCol-4),x1=Math.min(SW-2,maxCol+4),y0=Math.max(1,minRow-4),y1=Math.min(SH-2,maxRow+4);
+  let localChanged=0,localArea=0;
+  for(let rr=y0;rr<=y1;rr++)for(let cc=x0;cc<=x1;cc++){localArea++;localChanged+=changed[rr*SW+cc]}
+  const motionDensity=localChanged/Math.max(1,localArea);
+  const moving=!!previousGray&&localChanged>=3&&motionDensity>motionFloor;
+  const roundBall=ratio>=.62&&ratio<=1.62&&fill>=.32&&circularity>=.36;
+  // Fast balls can blur into a short streak, so allow a looser shape only when local motion confirms it.
+  const fastBlur=ratio>=.48&&ratio<=2.8&&fill>=.13&&circularity>=.16&&moving&&motionDensity>Math.max(.055,motionFloor*1.35);
+  if(!roundBall&&!fastBlur)continue;
+  const cx=sumX/area*view.width/SW,cy=sumY/area*view.height/SH,r=diam/2*view.width/SW;
+  const motion=clamp((motionDensity-motionFloor)/.28,0,1);
+  const shape=(1-circularity)*.48+(1-fill)*.22+Math.abs(Math.log(Math.max(.5,ratio)))*.18+Math.abs(Math.log(Math.max(1,diam)/8))*.02;
+  candidates.push({x:cx,y:cy,r,vx:0,vy:0,circularity,fill,shape,motion,moving,fastBlur});
  }
  let chosen=null,held=null;
  const movingCandidates=candidates.filter(c=>c.moving);
  if(track){
   let best=Infinity;
   for(const c of candidates){
-   const dist=Math.hypot(c.x-predicted.x,c.y-predicted.y);
-   if(dist>gate)continue;
-   if(!c.moving){if(!held||dist<held.dist)held={c,dist};continue}
-   const cost=c.shape+.22*(1-c.motion)+.38*dist/Math.max(1,gate);
+   const distance=Math.hypot(c.x-predicted.x,c.y-predicted.y);
+   if(distance>gate)continue;
+   if(!c.moving){if(!held||distance<held.distance)held={c,distance};continue}
+   const cost=c.shape+.18*(1-c.motion)+.40*distance/Math.max(1,gate);
    if(cost<best){best=cost;chosen=c}
   }
-  // If the ball moved quickly out of the old window, reacquire from the whole frame.
+  // Reacquire globally after a fast flight or an abrupt reversal.
   if(!chosen&&movingCandidates.length){
-   movingCandidates.sort((a,b)=>(a.shape-.35*a.motion)-(b.shape-.35*b.motion));
-   if(movingCandidates[0].motion>.22&&movingCandidates[0].shape<.78)chosen=movingCandidates[0];
+   movingCandidates.sort((a,b)=>(a.shape-.48*a.motion)-(b.shape-.48*b.motion));
+   const candidate=movingCandidates[0];
+   if(candidate.motion>.17&&candidate.shape<1.0)chosen=candidate;
   }
   if(chosen){
-   chosen.vx=track.vx*.58+(chosen.x-track.x)/elapsed*.42;
-   chosen.vy=track.vy*.58+(chosen.y-track.y)/elapsed*.42;
-   track=chosen;lost=0;history.push({x:chosen.x,y:chosen.y});if(history.length>48)history.shift();
-   $('detected').textContent='LOCKED';$('confidence').textContent=Math.round(clamp(100-chosen.shape*65+(chosen.motion*10),0,99))+'%';say('Ball locked · Tracking movement',true);
+   const instantVx=(chosen.x-track.x)/elapsed,instantVy=(chosen.y-track.y)/elapsed;
+   const reversal=track.vx*instantVx+track.vy*instantVy<0;
+   const alpha=reversal ? 0.88 : 0.72;
+   chosen.vx=track.vx*(1-alpha)+instantVx*alpha;
+   chosen.vy=track.vy*(1-alpha)+instantVy*alpha;
+   track=chosen;lost=0;history.push({x:chosen.x,y:chosen.y});if(history.length>64)history.shift();
+   $('detected').textContent='LOCKED';$('confidence').textContent=Math.round(clamp(100-chosen.shape*60+chosen.motion*12,0,99))+'%';
+   say('Ball locked · Tracking movement',true);
   }else if(held){
-   // Keep a confirmed ball locked while it pauses; do not transfer the track to nearby tape.
-   track.vx*=.72;track.vy*=.72;lost=0;$('detected').textContent='HOLDING';$('confidence').textContent='--';say('Ball held · Move to resume tracking',true);
+   track.vx*=.75;track.vy*=.75;lost=0;
+   $('detected').textContent='HOLDING';$('confidence').textContent='--';
+   say('Ball held · Move to resume tracking',true);
   }else{
-   lost++;if(lost>18)track=null;
+   lost++;if(lost>12)track=null;
    $('detected').textContent=track?'PREDICTING':'SEARCHING';$('confidence').textContent='--';
   }
  }else if(movingCandidates.length){
-  movingCandidates.sort((a,b)=>(a.shape-.42*a.motion)-(b.shape-.42*b.motion));
-  const c=movingCandidates[0];
-  if(c.motion>.18&&c.shape<.82){
-   c.vx=0;c.vy=0;track=c;chosen=c;lost=0;history.push({x:c.x,y:c.y});
-   $('detected').textContent='LOCKED';$('confidence').textContent=Math.round(clamp(100-c.shape*65+c.motion*10,0,99))+'%';say('Ball locked · Tracking movement',true);
+  movingCandidates.sort((a,b)=>(a.shape-.50*a.motion)-(b.shape-.50*b.motion));
+  const candidate=movingCandidates[0];
+  if(candidate.motion>.14&&candidate.shape<1.05){
+   candidate.vx=0;candidate.vy=0;track=candidate;lost=0;
+   history.push({x:candidate.x,y:candidate.y});
+   $('detected').textContent='LOCKED';$('confidence').textContent=Math.round(clamp(100-candidate.shape*60+candidate.motion*12,0,99))+'%';
+   say('Ball locked · Tracking movement',true);
   }
  }
  $('lost').textContent=lost;
