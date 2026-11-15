@@ -32,11 +32,11 @@ h2{font-size:16px;margin:0 0 7px}.trail{height:66px;background:#0d1712;border-ra
 <div class="stats">
 <div class="stat"><small>YOUR HALF</small><strong id="courtStatus" class="court-status">Not calibrated</strong></div>
 <div class="stat"><small>MY SIDE</small><strong id="netStatus">Not set</strong></div>
-<div class="stat"><small>BOUNCES</small><strong id="bounceCount">0</strong></div>
+<div class="stat"><small>BOUNCES · EACH LANDING</small><strong id="bounceCount">0</strong></div>
 <div class="stat"><small>IN</small><strong id="inCount">0</strong></div>
 <div class="stat"><small>OUT</small><strong id="outCount">0</strong></div>
 </div>
-<p class="help"><span class="key">Setup:</span> Calibrate only your half: tap its four corners clockwise, including the edge beside the net, then drag the numbered handles onto the tape. Next tap Set net and mark the four corners of the visible net area clockwise. Tracking stays on your side and ignores the far side. Court and bounce calls are estimates from one camera view.</p>
+<p class="help"><span class="key">Setup:</span> Calibrate only your half: tap its four corners clockwise, including the edge beside the net, then drag the numbered handles onto the tape. Next tap Set net and mark the four corners of the visible net area clockwise. Tracking stays on your side and ignores the far side. The counter adds one for each confirmed landing, including the first bounce. Tennis rules count a ball touching any part of a boundary line as in; camera calls remain estimates, especially at high speed.</p>
 <p class="help">Last landing call: <strong id="lastCall">—</strong> · Voice says “Out” for OUT and “In” only for estimated line landings.</p>
 </section>
 <section class="panel"><h2>How this version works</h2><p class="help">The detector searches for saturated tennis-ball yellow, filters candidates by shape and apparent size, and follows the best candidate using motion prediction. The match score is a heuristic, not a probability.</p></section>
@@ -47,7 +47,7 @@ const $=id=>document.getElementById(id),video=$('video'),view=$('view'),ctx=view
 let stream=null,tracking=false,raf=0,lastDetect=0,frameN=0,fpsTime=0,history=[],track=null,lost=0,previousGray=null,globalMotion=0;
 let grayBuffer=null,changedBuffer=null,maskBuffer=null,seenBuffer=null,pixelStack=null,regionBuffer=null,lastPaint=0;
 let courtCorners=[],netCorners=[],calibrationPoints=[],calibrating=false,draggingCorner=-1,draggingNetCorner=-1,netSetting=0,netPoints=[],voiceEnabled=true,bounceSamples=[],bounceCount=0,inCount=0,outCount=0,lastBounce=null,lastBounceTime=0,pendingReacquire=null;
-const SW=400,work=document.createElement('canvas'),wc=work.getContext('2d',{willReadFrequently:true});let SH=225;
+const SW=512,work=document.createElement('canvas'),wc=work.getContext('2d',{willReadFrequently:true});let SH=225;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 function loadCourt(){try{const saved=JSON.parse(localStorage.getItem('aiTennisCourtCorners')||'null');if(saved&&saved.kind==='my-side-v2'&&Array.isArray(saved.corners)){courtCorners=saved.corners.length===4?saved.corners:[];netCorners=Array.isArray(saved.netCorners)&&saved.netCorners.length===4?saved.netCorners:[]}}catch{courtCorners=[];netCorners=[]}}
 function say(s,on=false){$('status').textContent=s;$('dot').classList.toggle('on',on)}
@@ -145,9 +145,14 @@ function rebuildRegionMask(){
  }
 }
 function classifyLanding(x,y,r){
- const inside=pointInsideCourt(x,y),lineDistance=distanceToCourtLine(x,y),lineMargin=Math.max(4,r*1.15);
- if(lineDistance<=lineMargin)return 'LINE';
- return inside?'IN':'OUT';
+ // The court outline is the calibrated playable boundary. Under the tennis rules,
+ // any part of the ball touching that boundary is in, so compare the ball footprint
+ // with the nearest court edge instead of using a broad fixed pixel band.
+ const centerInside=pointInPoly(x,y,courtPoints()),edgeDistance=distanceToCourtLine(x,y);
+ const lineHalfWidth=Math.max(1.25,Math.min(view.width,view.height)*.002);
+ const ballRadius=Math.max(0,(r||0)*.9);
+ if(edgeDistance<=ballRadius+lineHalfWidth)return 'LINE';
+ return centerInside?'IN':'OUT';
 }
 function speakUmpire(call){
  if(!voiceEnabled)return false;
@@ -163,7 +168,7 @@ function speakUmpire(call){
  synth.speak(utterance);return true;
 }
 function countBounce(x,y,r,time){
- if(time-lastBounceTime<650)return;
+ if(time-lastBounceTime<320)return;
  const call=classifyLanding(x,y,r),inCourt=call!=='OUT';
  bounceCount++;if(inCourt)inCount++;else outCount++;
  lastBounce={x,y,call,time};lastBounceTime=time;
@@ -172,24 +177,32 @@ function countBounce(x,y,r,time){
 }
 function observeBounce(point,time){
  const axis=courtAxis();if(!axis||courtCorners.length!==4)return;
- const span=Math.max(1,axis.span),long=(point.x*axis.x+point.y*axis.y)/span;
- bounceSamples.push({x:point.x,y:point.y,long,time,r:point.r});if(bounceSamples.length>12)bounceSamples.shift();
- if(bounceSamples.length<5||time-lastBounceTime<650)return;
+ const span=Math.max(1,axis.span);
+ const long=(point.x*axis.x+point.y*axis.y)/span;
+ bounceSamples.push({x:point.x,y:point.y,long,time,r:point.r});
+ if(bounceSamples.length>10)bounceSamples.shift();
+ if(bounceSamples.length<5||time-lastBounceTime<320)return;
  const n=bounceSamples.length;
- for(let i=Math.max(2,n-7);i<=n-3;i++){
-  const a=bounceSamples[i-2],b=bounceSamples[i-1],p=bounceSamples[i],c=bounceSamples[i+1],d=bounceSamples[i+2];
-  const dtA=(b.time-a.time)/1000,dtB=(p.time-b.time)/1000,dtC=(c.time-p.time)/1000,dtD=(d.time-c.time)/1000;
-  if(Math.min(dtA,dtB,dtC,dtD)<=0||Math.max(dtA,dtB,dtC,dtD)>.14)continue;
-  const flipped=(v0,v1,v2,v3,threshold)=>v0*v1>0&&v2*v3>0&&v1*v2<0&&Math.min(Math.abs(v0),Math.abs(v1),Math.abs(v2),Math.abs(v3))>threshold;
-  const longFlip=flipped(b.long-a.long,p.long-b.long,c.long-p.long,d.long-c.long,.004);
-  const yFlip=flipped((b.y-a.y)/view.height,(p.y-b.y)/view.height,(c.y-p.y)/view.height,(d.y-c.y)/view.height,.005);
-  const xFlip=flipped((b.x-a.x)/view.width,(p.x-b.x)/view.width,(c.x-p.x)/view.width,(d.x-c.x)/view.width,.004);
-  const vx1=(p.x-a.x)/view.width,vy1=(p.y-a.y)/view.height,vx2=(d.x-p.x)/view.width,vy2=(d.y-p.y)/view.height;
-  const mag1=Math.hypot(vx1,vy1),mag2=Math.hypot(vx2,vy2),cos=(vx1*vx2+vy1*vy2)/Math.max(.0001,mag1*mag2);
-  const sharpTurn=cos<-.20&&mag1/(dtA+dtB)>.10&&mag2/(dtC+dtD)>.10&&mag2<mag1*1.8;
-  if(longFlip||yFlip||xFlip||sharpTurn){
-   countBounce(p.x,p.y,Math.max(p.r,point.r),time);return;
-  }
+ // Compare two-frame motion on each side of a possible impact. This confirms a
+ // bounce as soon as the ball leaves the impact, rather than waiting for another
+ // full flight or a second bounce.
+ for(let i=Math.max(2,n-6);i<=n-3;i++){
+  const a=bounceSamples[i-2],p=bounceSamples[i],d=bounceSamples[i+2];
+  const beforeMs=p.time-a.time,afterMs=d.time-p.time;
+  if(beforeMs<24||afterMs<24||beforeMs>180||afterMs>180)continue;
+  const before={x:(p.x-a.x)/view.width,y:(p.y-a.y)/view.height,long:p.long-a.long};
+  const after={x:(d.x-p.x)/view.width,y:(d.y-p.y)/view.height,long:d.long-p.long};
+  const beforeSpeed=Math.hypot(before.x,before.y),afterSpeed=Math.hypot(after.x,after.y);
+  if(beforeSpeed<.004||afterSpeed<.004)continue;
+  const cosine=(before.x*after.x+before.y*after.y)/(beforeSpeed*afterSpeed);
+  const longFlip=before.long*after.long<0&&Math.abs(before.long)>.003&&Math.abs(after.long)>.003;
+  const xFlip=before.x*after.x<0&&Math.abs(before.x)>.004&&Math.abs(after.x)>.004;
+  const yFlip=before.y*after.y<0&&Math.abs(before.y)>.004&&Math.abs(after.y)>.004;
+  const rebound=cosine<-.32&&(longFlip||xFlip||yFlip);
+  if(!rebound)continue;
+  const r=Math.max(p.r,a.r,d.r);
+  countBounce(p.x,p.y,r,time);
+  return;
  }
 }
 function confirmReacquire(candidate,time){
@@ -257,7 +270,7 @@ function detect(){
    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){if(!dx&&!dy)continue;const nx=qx+dx,ny=qy+dy,np=ny*SW+nx;if(nx>0&&nx<SW-1&&ny>0&&ny<SH-1&&colorMask[np]&&!visited[np]){visited[np]=1;pixelStack[top++]=np}}
   }
   const boxW=maxCol-minCol+1,boxH=maxRow-minRow+1,ratio=boxW/boxH,circularity=perimeter?4*Math.PI*area/(perimeter*perimeter):0,fill=area/(boxW*boxH),diam=(boxW+boxH)/2;
-  if(area<4||area>900||diam<2||diam>42)continue;
+  if(area<6||area>1450||diam<2.5||diam>55)continue;
   const x0=Math.max(1,minCol-4),x1=Math.min(SW-2,maxCol+4),y0=Math.max(1,minRow-4),y1=Math.min(SH-2,maxRow+4);
   let localChanged=0,localArea=0;for(let rr=y0;rr<=y1;rr++)for(let cc=x0;cc<=x1;cc++){localArea++;localChanged+=changed[rr*SW+cc]}
   const motionDensity=localChanged/Math.max(1,localArea),moving=!!previousGray&&localChanged>=3&&motionDensity>motionFloor;
@@ -266,7 +279,7 @@ function detect(){
   if(!roundBall&&!fastBlur)continue;
   const cx=sumX/area*view.width/SW,cy=sumY/area*view.height/SH,r=diam/2*view.width/SW,motion=clamp((motionDensity-motionFloor)/.28,0,1);
   if(!isInMySideRegion(cx,cy,r))continue;
-  const shape=(1-circularity)*.48+(1-fill)*.22+Math.abs(Math.log(Math.max(.5,ratio)))*.18+Math.abs(Math.log(Math.max(1,diam)/8))*.02;
+  const shape=(1-circularity)*.48+(1-fill)*.22+Math.abs(Math.log(Math.max(.5,ratio)))*.18+Math.abs(Math.log(Math.max(1,diam)/10))*.02;
   candidates.push({x:cx,y:cy,r,vx:0,vy:0,shape,motion,moving});
  }
  let chosen=null,held=null;const movingCandidates=candidates.filter(c=>c.moving);
